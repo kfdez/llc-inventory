@@ -1,0 +1,26 @@
+{
+  "name": "llc-inventory-v2",
+  "version": "0.1.0",
+  "private": true,
+  "description": "VPS-first, cloud-ready refactor of LLC inventory automation.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test",
+    "db:init": "node src/storage/initDb.js",
+    "demo:capture": "node src/dev/demoCapture.js",
+    "demo:analyze": "node src/dev/analyzeImage.js"
+  },
+  "engines": {
+    "node": ">=22.17.0"
+  },
+  "dependencies": {
+    "discord.js": "^14.26.3",
+    "dotenv": "^16.4.7",
+    "jsqr": "^1.4.0",
+    "pino": "^9.7.0",
+    "sharp": "^0.35.3",
+    "zxing-wasm": "^3.0.2"
+  },
+  "devDependencies": {}
+}

@@ -1,0 +1,9 @@
+node_modules/
+.env
+data/
+logs/
+captures/
+.runtime/
+.venv/
+__pycache__/
+*.log
