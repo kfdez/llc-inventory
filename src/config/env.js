@@ -71,6 +71,16 @@ function loadConfig() {
       detectorDevice: optionalEnv("LABEL_DETECTOR_DEVICE", "cpu"),
       detectorImageSize: numberEnv("LABEL_DETECTOR_IMGSZ", 1280),
       detectorConfidence: Number(optionalEnv("LABEL_DETECTOR_CONF", "0.2")) || 0.2
+    },
+    collectrProxy: {
+      enabled: booleanEnv("COLLECTR_PROXY_ENABLED", false),
+      host: optionalEnv("COLLECTR_PROXY_HOST", "127.0.0.1"),
+      port: numberEnv("COLLECTR_PROXY_PORT", 8788),
+      secret: requireWhenEnabled("COLLECTR_PROXY_SECRET", booleanEnv("COLLECTR_PROXY_ENABLED", false)),
+      accountId: requireWhenEnabled("COLLECTR_ACCOUNT_ID", booleanEnv("COLLECTR_PROXY_ENABLED", false)),
+      authToken: requireWhenEnabled("COLLECTR_AUTH_TOKEN", booleanEnv("COLLECTR_PROXY_ENABLED", false)),
+      apiBaseUrl: optionalEnv("COLLECTR_API_BASE_URL", "https://api-v2.getcollectr.com"),
+      requestTimeoutMs: numberEnv("COLLECTR_PROXY_REQUEST_TIMEOUT_MS", 30000)
     }
   };
 }

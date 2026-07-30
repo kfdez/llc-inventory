@@ -1,2 +1,6 @@
 APPS_SCRIPT_API_BASE_URL="https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec"
 APP_PIN="choose-a-private-pin"
+COLLECTR_ACCOUNT_ID="your-collectr-account-id"
+COLLECTR_CURRENCY="CAD"
+COLLECTR_PROXY_BASE_URL="https://your-vps-proxy-hostname.example/llc-inventory-v2-collectr/"
+COLLECTR_PROXY_SECRET="shared-worker-to-vps-secret"

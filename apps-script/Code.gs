@@ -356,6 +356,13 @@ function buildInventoryLookupItem_(match, normalizedCardId) {
     variance: getHeaderValue_(match.row, match.headers, ["Variance", "Variant"]),
     grade: getHeaderValue_(match.row, match.headers, ["Grade"]),
     portfolioName: getHeaderValue_(match.row, match.headers, ["Portfolio Name", "Portfolio", "Owner"]),
+    collectrCollectionId: getHeaderValue_(match.row, match.headers, ["Collectr Collection ID", "Collectr Portfolio ID"]),
+    collectrProductId: getHeaderValue_(match.row, match.headers, ["Collectr Product ID", "Product ID"]),
+    collectrSubType: getHeaderValue_(match.row, match.headers, ["Collectr SubType", "Collectr Subtype", "Product Sub Type"]),
+    collectrGradeId: getHeaderValue_(match.row, match.headers, ["Collectr Grade ID", "Grade ID"]),
+    collectrUserOwnedProductId: getHeaderValue_(match.row, match.headers, ["Collectr User Owned Product ID", "User Owned Product ID"]),
+    collectrLastSynced: getHeaderValue_(match.row, match.headers, ["Collectr Last Synced"]),
+    collectrSyncStatus: getHeaderValue_(match.row, match.headers, ["Collectr Sync Status"]),
     imageUrl: getHeaderValue_(match.row, match.headers, ["Image URL", "Image Link", "image_url"]),
     fields: fields
   };

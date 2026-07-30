@@ -6,13 +6,27 @@ const LOOKUP_STALE_TTL_MS = 2 * 60 * 60 * 1000;
 const LOOKUP_CACHE_MAX_ENTRIES = 2500;
 const INVENTORY_SNAPSHOT_TTL_MS = 15 * 60 * 1000;
 const INVENTORY_SNAPSHOT_STALE_TTL_MS = 2 * 60 * 60 * 1000;
+const COLLECTR_API_BASE_URL = "https://api-v2.getcollectr.com";
+const COLLECTR_PORTFOLIO_CACHE_TTL_MS = 10 * 60 * 1000;
 const lookupCache = new Map();
 let inventorySnapshot = null;
 let inventorySnapshotPromise = null;
 let inventorySnapshotLastError = "";
+let collectrPortfolioCache = null;
 
 function normalizeCardId(cardId) {
   return String(cardId || "").trim().toUpperCase();
+}
+
+function normalizeCollectrMatchValue(value) {
+  return String(value || "")
+    .replace(/\u00a0/g, " ")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function buildCollectrMatchKey(setName, cardNumber, variance) {
+  return [setName, cardNumber, variance].map(normalizeCollectrMatchValue).join("|");
 }
 
 function cloneLookupData(data) {
@@ -219,6 +233,216 @@ async function appsScriptPost(env, path, payload) {
   return data;
 }
 
+function requireCollectrConfig(env) {
+  const accountId = String(env.COLLECTR_ACCOUNT_ID || "").trim();
+  const proxyBaseUrl = String(env.COLLECTR_PROXY_BASE_URL || "").trim();
+  const proxySecret = String(env.COLLECTR_PROXY_SECRET || "").trim();
+  const token = String(env.COLLECTR_AUTH_TOKEN || "").trim();
+  if (!accountId || (!token && !(proxyBaseUrl && proxySecret))) {
+    throw new Error("Collectr is not configured.");
+  }
+  return {
+    accountId,
+    token,
+    apiBaseUrl: String(env.COLLECTR_API_BASE_URL || COLLECTR_API_BASE_URL).trim(),
+    proxyBaseUrl,
+    proxySecret,
+    currency: String(env.COLLECTR_CURRENCY || "CAD").trim().toUpperCase()
+  };
+}
+
+function buildCollectrProxyUrl(proxyBaseUrl) {
+  const base = String(proxyBaseUrl || "").trim();
+  const normalizedBase = base.endsWith("/") ? base : base + "/";
+  return new URL("collectr/api", normalizedBase);
+}
+
+async function collectrGetJson(env, path, query = {}) {
+  const config = requireCollectrConfig(env);
+  if (config.proxyBaseUrl) {
+    if (!config.proxySecret) {
+      throw new Error("Collectr proxy secret is not configured.");
+    }
+    const response = await fetch(buildCollectrProxyUrl(config.proxyBaseUrl), {
+      method: "POST",
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Collectr-Proxy-Secret": config.proxySecret
+      },
+      body: JSON.stringify({ path, query })
+    });
+    const text = await response.text();
+    let data;
+    try {
+      data = JSON.parse(text || "{}");
+    } catch (_) {
+      throw new Error(
+        "Collectr proxy returned an invalid JSON response: HTTP " + response.status +
+        ", content-type " + (response.headers.get("content-type") || "unknown") +
+        ", body " + text.replace(/\s+/g, " ").slice(0, 180)
+      );
+    }
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || "Collectr proxy request failed with HTTP " + response.status + ".");
+    }
+    return data.data;
+  }
+
+  const url = new URL(path, config.apiBaseUrl);
+  Object.entries(query).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      url.searchParams.set(key, String(value));
+    }
+  });
+
+  const response = await fetch(url, {
+    headers: {
+      "Accept": "application/json",
+      "Authorization": config.token,
+      "Origin": "https://app.getcollectr.com",
+      "Referer": "https://app.getcollectr.com/"
+    }
+  });
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text || "{}");
+  } catch (_) {
+    throw new Error(
+      "Collectr returned an invalid JSON response: HTTP " + response.status +
+      ", content-type " + (response.headers.get("content-type") || "unknown") +
+      ", body " + text.replace(/\s+/g, " ").slice(0, 180)
+    );
+  }
+  if (!response.ok) {
+    throw new Error(data.error || data.message || "Collectr request failed with HTTP " + response.status + ".");
+  }
+  return data;
+}
+
+async function fetchCollectrPortfolios(env) {
+  const now = Date.now();
+  const config = requireCollectrConfig(env);
+  const cacheKey = config.apiBaseUrl + "|" + config.accountId;
+  if (collectrPortfolioCache && collectrPortfolioCache.cacheKey === cacheKey && collectrPortfolioCache.expiresAt > now) {
+    return cloneLookupData(collectrPortfolioCache.data);
+  }
+
+  const data = await collectrGetJson(env, "/accounts/" + encodeURIComponent(config.accountId) + "/collections");
+  const portfolios = Array.isArray(data.data) ? data.data : [];
+  collectrPortfolioCache = {
+    cacheKey,
+    data: portfolios,
+    expiresAt: now + COLLECTR_PORTFOLIO_CACHE_TTL_MS
+  };
+  return cloneLookupData(portfolios);
+}
+
+function resolveCollectrPortfolio(item, portfolios) {
+  const directId = String(item.collectrCollectionId || item.collectrPortfolioId || "").trim();
+  if (directId) {
+    const portfolio = portfolios.find((candidate) => String(candidate.id || "").trim() === directId);
+    return {
+      ok: true,
+      source: "inventory",
+      portfolio: portfolio || { id: directId, name: item.portfolioName || "" },
+      warnings: portfolio ? [] : ["Collectr Collection ID was found in inventory but not in the live portfolio list."]
+    };
+  }
+
+  const portfolioName = String(item.portfolioName || "").trim();
+  if (!portfolioName) {
+    return { ok: false, error: "Inventory row has no Portfolio Name or Collectr Collection ID.", portfolio: null, warnings: [] };
+  }
+
+  const matches = portfolios.filter((portfolio) =>
+    normalizeCollectrMatchValue(portfolio.name) === normalizeCollectrMatchValue(portfolioName)
+  );
+  if (matches.length === 1) {
+    return { ok: true, source: "collectr-name", portfolio: matches[0], warnings: [] };
+  }
+  if (!matches.length) {
+    return { ok: false, error: "Collectr portfolio not found: " + portfolioName, portfolio: null, warnings: [] };
+  }
+  return { ok: false, error: "Collectr portfolio match is ambiguous: " + portfolioName, portfolio: null, warnings: [] };
+}
+
+function findUniqueCollectrProduct(item, products) {
+  const expectedName = normalizeCollectrMatchValue(item.name);
+  const expectedSet = normalizeCollectrMatchValue(item.setName);
+  const expectedNumber = normalizeCollectrMatchValue(item.cardNumber);
+  const expectedSubtype = normalizeCollectrMatchValue(item.collectrSubType || item.variance);
+
+  const exactMatches = products.filter((product) =>
+    normalizeCollectrMatchValue(product.catalog_group) === expectedSet &&
+    normalizeCollectrMatchValue(product.card_number) === expectedNumber &&
+    (!expectedName || normalizeCollectrMatchValue(product.product_name) === expectedName) &&
+    (!expectedSubtype || normalizeCollectrMatchValue(product.product_sub_type) === expectedSubtype)
+  );
+  if (exactMatches.length === 1) return { ok: true, product: exactMatches[0], source: "catalog-exact" };
+  if (exactMatches.length > 1) return { ok: false, error: "Collectr product match is ambiguous: " + exactMatches.length + " exact matches." };
+
+  const lineMatches = products.filter((product) =>
+    normalizeCollectrMatchValue(product.catalog_group) === expectedSet &&
+    normalizeCollectrMatchValue(product.card_number) === expectedNumber
+  );
+  if (lineMatches.length === 1) return { ok: true, product: lineMatches[0], source: "catalog-line" };
+  if (lineMatches.length > 1) return { ok: false, error: "Collectr product match is ambiguous: " + lineMatches.length + " line matches." };
+
+  if (products.length === 1) return { ok: true, product: products[0], source: "catalog-single" };
+  return { ok: false, error: "Collectr product not found." };
+}
+
+async function resolveCollectrProduct(env, item) {
+  const directId = String(item.collectrProductId || "").trim();
+  if (directId) {
+    return {
+      ok: true,
+      source: "inventory",
+      product: {
+        product_id: directId,
+        product_sub_type: item.collectrSubType || item.variance || "",
+        grade_id: item.collectrGradeId || "",
+        user_owned_product_id: item.collectrUserOwnedProductId || "",
+        product_name: item.name || "",
+        catalog_group: item.setName || "",
+        card_number: item.cardNumber || ""
+      }
+    };
+  }
+
+  const config = requireCollectrConfig(env);
+  const searchString = [item.setName, item.name, item.cardNumber]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join("\t");
+  if (!searchString) {
+    return { ok: false, error: "Inventory row does not have enough detail to search Collectr." };
+  }
+
+  const data = await collectrGetJson(env, "/catalog", {
+    username: config.accountId,
+    searchString,
+    filters: "",
+    offset: 0,
+    limit: 30,
+    unstackedView: "true"
+  });
+  return findUniqueCollectrProduct(item, Array.isArray(data.data) ? data.data : []);
+}
+
+async function fetchCollectrOwnedProduct(env, portfolioId, productId) {
+  const config = requireCollectrConfig(env);
+  const data = await collectrGetJson(env, "/collections/" + encodeURIComponent(config.accountId) + "/products", {
+    collectionId: portfolioId,
+    productIds: productId,
+    unstackedView: "true",
+    currency: config.currency
+  });
+  return Array.isArray(data.data) ? data.data : [];
+}
+
 async function lookup(request, env) {
   const authorized = isAuthorized(request, env);
   if (!authorized.ok) return authorized.response;
@@ -338,6 +562,120 @@ async function getStickerTargets(request, env) {
     return json({ ok: true, ...data.result });
   } catch (error) {
     return json({ ok: false, error: "Unable to load matching portfolios: " + error.message }, 502);
+  }
+}
+
+async function resolveCollectrCard(request, env) {
+  const authorized = isAuthorized(request, env);
+  if (!authorized.ok) return authorized.response;
+
+  const requestUrl = new URL(request.url);
+  const cardId = String(requestUrl.searchParams.get("cardId") || "").trim();
+  if (!cardId || cardId.length > 200) {
+    return json({ ok: false, error: "A valid Card ID is required." }, 400);
+  }
+
+  let item = null;
+  const snapshotLookup = getInventorySnapshotLookup(cardId, { allowStale: true });
+  if (snapshotLookup) {
+    item = snapshotLookup.item;
+  }
+  if (!item) {
+    try {
+      await ensureInventorySnapshot(env);
+      const freshSnapshotLookup = getInventorySnapshotLookup(cardId, { allowStale: true });
+      item = freshSnapshotLookup && freshSnapshotLookup.item;
+    } catch (_) {
+      item = null;
+    }
+  }
+  if (!item) {
+    const lookupResponse = await lookup(request, env);
+    const lookupData = await lookupResponse.json();
+    if (!lookupResponse.ok || !lookupData.ok) {
+      return json({ ok: false, error: lookupData.error || "Inventory lookup failed." }, lookupResponse.status);
+    }
+    item = lookupData.item;
+  }
+  if (!item) {
+    return json({ ok: false, error: "No spreadsheet row matched " + cardId + "." }, 404);
+  }
+
+  try {
+    const portfolios = await fetchCollectrPortfolios(env);
+    const portfolioResolution = resolveCollectrPortfolio(item, portfolios);
+    if (!portfolioResolution.ok) {
+      return json({
+        ok: false,
+        error: portfolioResolution.error,
+        item,
+        portfolios: portfolios.map((portfolio) => ({ id: portfolio.id, name: portfolio.name }))
+      }, 409);
+    }
+
+    const productResolution = await resolveCollectrProduct(env, item);
+    if (!productResolution.ok) {
+      return json({
+        ok: false,
+        error: productResolution.error,
+        item,
+        portfolio: {
+          id: portfolioResolution.portfolio.id,
+          name: portfolioResolution.portfolio.name || item.portfolioName || ""
+        }
+      }, 409);
+    }
+
+    const ownedProducts = await fetchCollectrOwnedProduct(
+      env,
+      portfolioResolution.portfolio.id,
+      productResolution.product.product_id
+    );
+    const expectedSubtype = normalizeCollectrMatchValue(
+      productResolution.product.product_sub_type || item.collectrSubType || item.variance
+    );
+    const expectedGradeId = String(productResolution.product.grade_id || item.collectrGradeId || "").trim();
+    const ownedMatches = ownedProducts.filter((product) =>
+      String(product.product_id || "") === String(productResolution.product.product_id || "") &&
+      (!expectedSubtype || normalizeCollectrMatchValue(product.product_sub_type) === expectedSubtype) &&
+      (!expectedGradeId || String(product.grade_id || "") === expectedGradeId)
+    );
+    const selectedOwnedProduct = ownedMatches.length === 1 ? ownedMatches[0] :
+      ownedProducts.length === 1 ? ownedProducts[0] : null;
+
+    const warnings = portfolioResolution.warnings.slice();
+    if (ownedMatches.length > 1) warnings.push("Collectr owned product lookup returned multiple matching lines.");
+    if (!selectedOwnedProduct) warnings.push("Product is not currently present in the resolved Collectr portfolio.");
+
+    return json({
+      ok: true,
+      item,
+      portfolio: {
+        id: portfolioResolution.portfolio.id,
+        name: portfolioResolution.portfolio.name || item.portfolioName || "",
+        source: portfolioResolution.source
+      },
+      product: {
+        id: String(productResolution.product.product_id || ""),
+        name: productResolution.product.product_name || item.name || "",
+        setName: productResolution.product.catalog_group || item.setName || "",
+        cardNumber: productResolution.product.card_number || item.cardNumber || "",
+        subType: productResolution.product.product_sub_type || item.collectrSubType || item.variance || "",
+        gradeId: productResolution.product.grade_id || item.collectrGradeId || "",
+        userOwnedProductId: selectedOwnedProduct && selectedOwnedProduct.user_owned_product_id ||
+          productResolution.product.user_owned_product_id || item.collectrUserOwnedProductId || "",
+        source: productResolution.source
+      },
+      collectr: {
+        currentQuantity: selectedOwnedProduct ? Number(selectedOwnedProduct.quantity || 0) : 0,
+        ownedLineCount: ownedProducts.length,
+        matchedOwnedLineCount: ownedMatches.length,
+        currency: String(env.COLLECTR_CURRENCY || "CAD").trim().toUpperCase()
+      },
+      warnings
+    });
+  } catch (error) {
+    return json({ ok: false, error: "Collectr resolve failed: " + error.message, item }, 502);
   }
 }
 
@@ -487,6 +825,10 @@ export default {
     if (url.pathname === "/api/sticker-targets") {
       if (request.method !== "GET") return json({ ok: false, error: "Method not allowed." }, 405);
       return getStickerTargets(request, env);
+    }
+    if (url.pathname === "/api/collectr/resolve") {
+      if (request.method !== "GET") return json({ ok: false, error: "Method not allowed." }, 405);
+      return resolveCollectrCard(request, env);
     }
     if (url.pathname === "/api/audit/start") {
       if (request.method !== "POST") return json({ ok: false, error: "Method not allowed." }, 405);

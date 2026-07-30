@@ -5,6 +5,7 @@ const { AppsScriptClient } = require("./appsScript/client");
 const { CaptureService } = require("./capture/captureService");
 const { DryRunDiscordAdapter, DiscordThreadAdapter } = require("./discord/adapter");
 const { startDiscordBot } = require("./discord/bot");
+const { startCollectrProxyServer } = require("./collectr/proxyServer");
 
 async function main() {
   const config = loadConfig();
@@ -29,6 +30,7 @@ async function main() {
   }, "Starting LLC Inventory v2.");
 
   await startDiscordBot({ config, logger, captureService });
+  const collectrProxyServer = startCollectrProxyServer({ config, logger });
 
   const interval = setInterval(() => {
     captureService.processNextJob().catch((error) => {
@@ -38,6 +40,9 @@ async function main() {
 
   process.on("SIGINT", () => {
     clearInterval(interval);
+    if (collectrProxyServer) {
+      collectrProxyServer.close();
+    }
     store.close();
     process.exit(0);
   });
