@@ -1,0 +1,13 @@
+{
+  "name": "Card Inventory Scanner",
+  "short_name": "Card Scanner",
+  "description": "Scan inventory QR labels and view spreadsheet pricing.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#07101e",
+  "theme_color": "#07101e",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

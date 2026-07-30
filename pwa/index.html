@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07101e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Card Scanner">
+  <title>Card Inventory Scanner</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/src/app.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div><p class="eyebrow">Inventory</p><h1>Card scanner</h1></div>
+      <button id="modeMenuButton" class="mode-menu-button" type="button" aria-label="Open mode menu" aria-controls="modeDrawer" aria-expanded="false"><span></span><span></span><span></span></button>
+    </header>
+
+    <div id="modeBackdrop" class="drawer-backdrop" hidden></div>
+    <aside id="modeDrawer" class="mode-drawer" aria-hidden="true">
+      <div class="drawer-heading"><div><p class="eyebrow">Scanner</p><h2>Select mode</h2></div><button id="closeModeButton" class="secondary drawer-close" type="button" aria-label="Close mode menu">×</button></div>
+      <nav class="mode-switch" aria-label="Scanner mode">
+        <button id="lookupModeButton" class="mode-button active" type="button">Lookup</button>
+        <button id="cartModeButton" class="mode-button" type="button">Cart <span id="cartBadge">0</span></button>
+        <button id="auditModeButton" class="mode-button" type="button">Audit <span id="auditBadge">0</span></button>
+      </nav>
+    </aside>
+
+    <section id="pinScreen" class="pin-screen panel">
+      <p class="eyebrow">Private access</p>
+      <h2>Enter scanner PIN</h2>
+      <form id="pinForm">
+        <input id="pinInput" type="password" inputmode="numeric" autocomplete="current-password" placeholder="Scanner PIN" required>
+        <button type="submit">Unlock</button>
+      </form>
+      <p id="pinMessage" class="message"></p>
+    </section>
+
+    <section id="scannerScreen" hidden>
+      <article class="camera-panel panel">
+        <div class="viewport">
+          <video id="video" playsinline muted></video>
+          <div class="scan-frame"></div>
+        </div>
+        <p id="cameraMessage">Start the camera, then center a QR label.</p>
+        <div class="controls">
+          <button id="startButton" type="button">Start camera</button>
+          <button id="stopButton" class="secondary" type="button" disabled>Stop</button>
+          <button id="lockButton" class="secondary" type="button">Lock</button>
+        </div>
+        <div id="decodedPanel" class="decoded-panel">
+          <div class="decoded-heading"><span>Decoded QR</span><span id="status" class="pill">Camera stopped</span></div>
+          <strong id="decodedValue">Waiting for scan</strong>
+        </div>
+        <button id="captureAuditQrButton" class="capture-audit-button" type="button" disabled hidden>Capture QR</button>
+        <p id="stickerSyncText" class="sync-status"></p>
+        <p id="cacheStatusText" class="sync-status"></p>
+        <section id="auditControls" class="audit-controls" hidden>
+          <form id="auditSessionForm">
+            <label for="auditSessionNameInput">Audit Session</label>
+            <div><input id="auditSessionNameInput" autocomplete="off" placeholder="July inventory audit"><button id="startAuditButton" type="submit">Start</button></div>
+          </form>
+          <div class="audit-actions">
+            <button id="stopAuditButton" class="secondary" type="button" disabled>Stop audit</button>
+          </div>
+          <p id="auditSessionText" class="sync-status">No active audit session.</p>
+        </section>
+        <form id="manualForm" class="manual-form">
+          <label for="manualId">Manual Card ID</label>
+          <div><input id="manualId" autocomplete="off" autocapitalize="characters" placeholder="AL-S-E51F26CF"><button type="submit">Look up</button></div>
+        </form>
+      </article>
+
+      <article id="result" class="result-panel panel empty">
+        <div id="emptyState"><p class="eyebrow">Ready</p><h2>Scan a label</h2><p>Card details and pricing will appear here.</p></div>
+        <div id="resultContent" hidden>
+          <div class="result-heading"><div><p id="resultSet" class="eyebrow"></p><div class="result-title-row"><h2 id="resultName"></h2><span id="resultId" class="id-badge"></span></div><p id="resultMeta"></p></div></div>
+          <div class="prices"><button id="marketPriceOption" class="price-option" type="button"><span>Market · tap to use</span><strong id="marketPrice">—</strong></button><button id="suggestedPriceOption" class="price-option" type="button"><span>Suggested · tap to use</span><strong id="suggestedPrice">—</strong></button></div>
+          <form id="stickerPriceForm" class="sticker-editor">
+            <label for="stickeredPriceInput">Stickered Price</label>
+            <p id="stickerPortfolioText" class="sticker-portfolio"></p>
+            <div class="sticker-editor-row"><span>$</span><input id="stickeredPriceInput" type="number" inputmode="decimal" min="0" step="0.01" placeholder="0.00"><button id="saveStickerPriceButton" type="submit">Save</button></div>
+            <div class="sticker-targets"><span>Locations updated</span><div id="stickerTargetsList">Checking matching portfolios…</div></div>
+            <p id="lastStickeredText" class="sticker-meta">Not stickered yet</p>
+          </form>
+          <dl id="details"></dl>
+          <details><summary>All spreadsheet fields</summary><dl id="allFields"></dl></details>
+        </div>
+      </article>
+
+      <article id="cartPanel" class="cart-panel panel" hidden>
+        <div class="cart-heading">
+          <div><p class="eyebrow">Current cart</p><h2>Scanned items</h2></div>
+          <button id="clearCartButton" class="secondary compact-button" type="button">Clear</button>
+        </div>
+        <div id="cartEmpty" class="cart-empty">Scan labels to build the cart.</div>
+        <div id="cartContent" hidden>
+          <div id="cartItems" class="cart-items"></div>
+          <div class="cart-summary">
+            <div><span>Items</span><strong id="cartItemCount">0</strong></div>
+            <div><span>Market total</span><strong id="cartTotal">$0.00</strong></div>
+          </div>
+        </div>
+      </article>
+
+      <article id="auditPanel" class="audit-panel panel" hidden>
+        <div class="cart-heading">
+          <div><p class="eyebrow">Physical audit</p><h2>Scanned labels</h2></div>
+          <button id="clearAuditLogButton" class="secondary compact-button" type="button">Clear log</button>
+        </div>
+        <div class="audit-summary">
+          <div><span>Session scans</span><strong id="auditScanCount">0</strong></div>
+          <div><span>Status</span><strong id="auditStatusText">Inactive</strong></div>
+        </div>
+        <div id="auditLog" class="audit-log empty">Start an audit session and scan labels.</div>
+      </article>
+    </section>
+  </main>
+  <canvas id="scanCanvas" hidden></canvas>
+  <script type="module" src="/src/app.js"></script>
+</body>
+</html>

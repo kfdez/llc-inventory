@@ -24,6 +24,7 @@ commands, create Discord threads, or write to Apps Script unless configured.
 - `src/appsScript/` - Apps Script API adapter
 - `src/discord/` - Discord adapter skeleton
 - `src/config/` - environment loading and validation
+- `pwa/` - copied Cloudflare Worker scanner PWA for lookup, pricing, cart, and audit workflows
 
 ## Commands
 
@@ -53,6 +54,12 @@ LABEL_DETECTOR_DEVICE=cpu
 
 The detector is optional. If it is disabled, or if it fails, v2 can still fall
 back to full-image QR decoding.
+
+## PWA
+
+The copied scanner PWA lives in `pwa/` and builds as a separate Cloudflare Worker
+app. It currently requires inventory and audit Apps Script endpoints that are
+broader than the bot-only v2 Apps Script.
 
 ## Migration Rule
 

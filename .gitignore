@@ -7,3 +7,8 @@ captures/
 .venv/
 __pycache__/
 *.log
+pwa/node_modules/
+pwa/dist/
+pwa/.wrangler/
+pwa/.dev.vars
+pwa/public/zxing_reader.wasm

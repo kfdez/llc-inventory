@@ -1,0 +1,2 @@
+APPS_SCRIPT_API_BASE_URL="https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec"
+APP_PIN="choose-a-private-pin"
