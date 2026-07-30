@@ -508,8 +508,10 @@ async function resolveCollectrItem(env, item) {
       name: productResolution.product.product_name || item.name || "",
       setName: productResolution.product.catalog_group || item.setName || "",
       cardNumber: productResolution.product.card_number || item.cardNumber || "",
-      subType: productResolution.product.product_sub_type || item.collectrSubType || item.variance || "",
-      gradeId: productResolution.product.grade_id || item.collectrGradeId || "",
+      subType: selectedOwnedProduct && selectedOwnedProduct.product_sub_type ||
+        productResolution.product.product_sub_type || item.collectrSubType || item.variance || "",
+      gradeId: selectedOwnedProduct && selectedOwnedProduct.grade_id ||
+        productResolution.product.grade_id || item.collectrGradeId || "",
       userOwnedProductId: selectedOwnedProduct && selectedOwnedProduct.user_owned_product_id ||
         productResolution.product.user_owned_product_id || item.collectrUserOwnedProductId || "",
       source: productResolution.source

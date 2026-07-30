@@ -341,8 +341,7 @@ test("collectr quantity update posts target quantity through the VPS proxy", asy
               catalog_group: "Black Bolt",
               product_name: "Crustle ",
               card_number: "130/086",
-              product_sub_type: "Holofoil",
-              grade_id: "52"
+              product_sub_type: "Holofoil"
             }]
           }
         });
