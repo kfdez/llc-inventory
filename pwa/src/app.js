@@ -389,9 +389,10 @@ async function stopAuditSession() {
   renderAuditState();
 }
 
-function buildAuditScanEntry(cardId) {
+function buildAuditScanEntry(cardId, sessionId) {
   return {
     recordKey: crypto.randomUUID(),
+    sessionId,
     cardId,
     name: cardId,
     setName: "",
@@ -406,7 +407,7 @@ function queueAuditScan(cardId) {
   if (!auditSession) {
     throw new Error("Start an audit session first.");
   }
-  const entry = buildAuditScanEntry(cardId);
+  const entry = buildAuditScanEntry(cardId, auditSession.session_id);
   auditScanCount += 1;
   addAuditLogEntry(entry);
   void enrichAuditEntry(entry.recordKey, cardId);
@@ -447,11 +448,13 @@ async function enrichAuditEntry(recordKey, cardId) {
 }
 
 async function sendAuditScan(entry) {
+  const sessionId = entry.sessionId || auditSession && auditSession.session_id;
+  if (!sessionId) throw new Error("Audit session is required.");
   const response = await fetch("/api/audit/scan", {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-App-Pin": pin },
     body: JSON.stringify({
-      sessionId: auditSession.session_id,
+      sessionId,
       cardId: entry.cardId,
       recordKey: entry.recordKey
     })
@@ -477,7 +480,7 @@ async function drainAuditSaveQueue() {
   if (auditSaveRunning) return;
   auditSaveRunning = true;
   try {
-    while (auditSession) {
+    while (auditSession || auditLog.some((candidate) => candidate.status === "pending" && candidate.sessionId)) {
       const entry = auditLog.slice().reverse().find((candidate) => candidate.status === "pending");
       if (!entry) break;
       const attempts = Number(entry.attempts || 0) + 1;
@@ -486,7 +489,7 @@ async function drainAuditSaveQueue() {
         await sendAuditScan(entry);
         updateAuditLogEntry(entry.recordKey, { status: "synced", message: "Synced" });
       } catch (error) {
-        if (attempts < 3 && auditSession) {
+        if (attempts < 3 && entry.sessionId) {
           updateAuditLogEntry(entry.recordKey, { status: "pending", kind: "", attempts, message: "Retry queued: " + error.message });
           await new Promise((resolve) => setTimeout(resolve, 400 * attempts));
           continue;
@@ -514,14 +517,15 @@ function cancelAuditScan(recordKey) {
 
 async function undoAuditScan(recordKey) {
   const entry = auditLog.find((candidate) => candidate.recordKey === recordKey);
-  if (!entry || entry.status !== "synced" || !auditSession) return;
+  const sessionId = entry && entry.sessionId ? entry.sessionId : auditSession && auditSession.session_id;
+  if (!entry || entry.status !== "synced" || !sessionId) return;
   updateAuditLogEntry(recordKey, { status: "undoing", message: "Undoing" });
   try {
     const response = await fetch("/api/audit/undo", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-App-Pin": pin },
       body: JSON.stringify({
-        sessionId: auditSession.session_id,
+        sessionId,
         recordKey
       })
     });
