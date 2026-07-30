@@ -1,5 +1,7 @@
 const BOT_CONFIG_SHEET = "Bot Config";
 const CAPTURE_SESSIONS_SHEET = "CaptureSessions";
+const AUDIT_SESSIONS_SHEET = "AuditSessions";
+const AUDIT_SCANS_SHEET = "AuditScans";
 const SALES_LOG_TEMPLATE_SHEET = "Sales Log - Template";
 const SINGLES_INVENTORY_SHEET = "Singles Inventory";
 const SLABS_INVENTORY_SHEET = "Slabs Inventory";
@@ -37,6 +39,29 @@ const CAPTURE_SESSION_HEADERS = [
   "status"
 ];
 
+const AUDIT_SESSION_HEADERS = [
+  "session_id",
+  "session_name",
+  "sheet_tab_name",
+  "thread_id",
+  "started_at",
+  "started_by",
+  "ended_at",
+  "ended_by",
+  "status"
+];
+
+const AUDIT_SCAN_HEADERS = [
+  "session_id",
+  "record_key",
+  "scanned_at",
+  "card_id",
+  "status",
+  "undone_at",
+  "message_id",
+  "source_timestamp_ms"
+];
+
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu("Inventory Bot")
@@ -47,6 +72,8 @@ function onOpen() {
 function setupBotSheets() {
   getConfigSheet_();
   getCaptureSessionsSheet_();
+  getAuditSessionsSheet_();
+  getAuditScansSheet_();
   getSalesLogTemplateSheet_();
   SpreadsheetApp.getUi().alert("Bot sheets are ready.");
 }
@@ -109,6 +136,22 @@ function doPost(e) {
       return jsonResponse_({ ok: true, result: updateInventoryStickerPrice_(payload) });
     }
 
+    if (path === "audit/start") {
+      return jsonResponse_({ ok: true, session: startAuditSession_(payload) });
+    }
+
+    if (path === "audit/stop") {
+      return jsonResponse_({ ok: true, session: stopAuditSession_(payload) });
+    }
+
+    if (path === "audit/scan") {
+      return jsonResponse_({ ok: true, result: recordAuditScan_(payload) });
+    }
+
+    if (path === "audit/undo") {
+      return jsonResponse_({ ok: true, result: undoAuditScan_(payload) });
+    }
+
     return jsonResponse_({ ok: false, error: "Unknown POST path: " + path });
   } catch (error) {
     return jsonResponse_({ ok: false, error: error.message });
@@ -156,6 +199,18 @@ function getConfigSheet_() {
 function getCaptureSessionsSheet_() {
   const sheet = getOrCreateSheet_(CAPTURE_SESSIONS_SHEET);
   ensureHeaders_(sheet, CAPTURE_SESSION_HEADERS);
+  return sheet;
+}
+
+function getAuditSessionsSheet_() {
+  const sheet = getOrCreateSheet_(AUDIT_SESSIONS_SHEET);
+  ensureHeaders_(sheet, AUDIT_SESSION_HEADERS);
+  return sheet;
+}
+
+function getAuditScansSheet_() {
+  const sheet = getOrCreateSheet_(AUDIT_SCANS_SHEET);
+  ensureHeaders_(sheet, AUDIT_SCAN_HEADERS);
   return sheet;
 }
 
@@ -829,6 +884,267 @@ function stopCaptureSession_(payload) {
     }
 
     return null;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function buildAuditLogSheetName_(sessionName) {
+  return sanitizeSheetName_("Audit Log - " + formatLocalDateKey_(new Date()) + " - " + String(sessionName || "Session").trim());
+}
+
+function createAuditLogSheet_(sessionName) {
+  const spreadsheet = getSpreadsheet_();
+  let sheetName = buildAuditLogSheetName_(sessionName);
+  let suffix = 2;
+
+  while (spreadsheet.getSheetByName(sheetName)) {
+    sheetName = sanitizeSheetName_(buildAuditLogSheetName_(sessionName) + " " + suffix);
+    suffix += 1;
+  }
+
+  const sheet = spreadsheet.insertSheet(sheetName);
+  ensureHeaders_(sheet, AUDIT_SCAN_HEADERS);
+  return sheet;
+}
+
+function serializeAuditSession_(session) {
+  const output = {};
+  AUDIT_SESSION_HEADERS.forEach(function (header) {
+    const value = session[header];
+    output[header] = value instanceof Date ? value.toISOString() : value;
+  });
+  return output;
+}
+
+function startAuditSession_(payload) {
+  const threadId = String(payload.threadId || "").trim() || "pwa-audit";
+  const sessionName = String(payload.sessionName || "").trim() || "Inventory audit";
+  const startedBy = String(payload.startedBy || "").trim();
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+
+  try {
+    const logSheet = createAuditLogSheet_(sessionName);
+    const session = {
+      session_id: Utilities.getUuid(),
+      session_name: sessionName,
+      sheet_tab_name: logSheet.getName(),
+      thread_id: threadId,
+      started_at: new Date(),
+      started_by: startedBy,
+      ended_at: "",
+      ended_by: "",
+      status: "active"
+    };
+
+    getAuditSessionsSheet_().appendRow(AUDIT_SESSION_HEADERS.map(function (header) {
+      return session[header];
+    }));
+
+    SpreadsheetApp.flush();
+    return serializeAuditSession_(session);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function getAuditSessionById_(sessionId) {
+  const sessions = getSheetRows_(AUDIT_SESSIONS_SHEET);
+  const session = sessions.filter(function (row) {
+    return String(row.session_id || "").trim() === String(sessionId || "").trim();
+  })[0];
+
+  if (!session) {
+    throw new Error("Audit session not found.");
+  }
+
+  return session;
+}
+
+function stopAuditSession_(payload) {
+  const threadId = String(payload.threadId || "").trim() || "pwa-audit";
+  const endedBy = String(payload.endedBy || "").trim();
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+
+  try {
+    const sheet = getAuditSessionsSheet_();
+    const values = sheet.getDataRange().getValues();
+    if (values.length < 2) {
+      return null;
+    }
+
+    const headers = values[0];
+    const threadIndex = headers.indexOf("thread_id");
+    const statusIndex = headers.indexOf("status");
+    const endedAtIndex = headers.indexOf("ended_at");
+    const endedByIndex = headers.indexOf("ended_by");
+
+    for (let rowIndex = values.length - 1; rowIndex >= 1; rowIndex -= 1) {
+      if (String(values[rowIndex][threadIndex] || "").trim() === threadId &&
+          String(values[rowIndex][statusIndex] || "").trim().toLowerCase() === "active") {
+        const rowNumber = rowIndex + 1;
+        const endedAt = new Date();
+        sheet.getRange(rowNumber, statusIndex + 1).setValue("ended");
+        sheet.getRange(rowNumber, endedAtIndex + 1).setValue(endedAt);
+        sheet.getRange(rowNumber, endedByIndex + 1).setValue(endedBy);
+        SpreadsheetApp.flush();
+
+        const session = {};
+        headers.forEach(function (header, columnIndex) {
+          session[header] = columnIndex === statusIndex
+            ? "ended"
+            : columnIndex === endedAtIndex
+              ? endedAt
+              : columnIndex === endedByIndex
+                ? endedBy
+                : values[rowIndex][columnIndex];
+        });
+        return serializeAuditSession_(session);
+      }
+    }
+
+    return null;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function buildAuditScanRecord_(payload) {
+  const sessionId = String(payload.sessionId || "").trim();
+  const cardId = String(payload.cardId || "").trim();
+  const recordKey = String(payload.recordKey || "").trim() || Utilities.getUuid();
+  const timestampMs = Number(payload.sourceTimestampMs || Date.now());
+
+  if (!sessionId) {
+    throw new Error("Audit session is required.");
+  }
+  if (!cardId) {
+    throw new Error("Card ID is required.");
+  }
+
+  return {
+    session_id: sessionId,
+    record_key: recordKey,
+    scanned_at: new Date(timestampMs),
+    card_id: cardId,
+    status: "active",
+    undone_at: "",
+    message_id: String(payload.messageId || "").trim(),
+    source_timestamp_ms: timestampMs
+  };
+}
+
+function writeAuditRecordToSheet_(sheet, record) {
+  const headerMap = getHeaderMap_(sheet);
+  const recordKeyColumn = headerMap["record_key"];
+  const rowValues = AUDIT_SCAN_HEADERS.map(function (header) {
+    return record[header] === undefined ? "" : record[header];
+  });
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow >= 2 && recordKeyColumn) {
+    const keys = sheet.getRange(2, recordKeyColumn, lastRow - 1, 1).getValues();
+    for (let index = 0; index < keys.length; index += 1) {
+      if (String(keys[index][0] || "").trim() === record.record_key) {
+        sheet.getRange(index + 2, 1, 1, AUDIT_SCAN_HEADERS.length).setValues([rowValues]);
+        return { appended: 0, updated: 1 };
+      }
+    }
+  }
+
+  sheet.appendRow(rowValues);
+  return { appended: 1, updated: 0 };
+}
+
+function recordAuditScan_(payload) {
+  const record = buildAuditScanRecord_(payload);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+
+  try {
+    const session = getAuditSessionById_(record.session_id);
+    if (String(session.status || "").trim().toLowerCase() !== "active") {
+      throw new Error("Audit session is not active.");
+    }
+
+    const logSheet = getSpreadsheet_().getSheetByName(session.sheet_tab_name) || getAuditScansSheet_();
+    ensureHeaders_(logSheet, AUDIT_SCAN_HEADERS);
+    const writeResult = writeAuditRecordToSheet_(logSheet, record);
+    writeAuditRecordToSheet_(getAuditScansSheet_(), record);
+
+    SpreadsheetApp.flush();
+    return {
+      appended: writeResult.appended,
+      updated: writeResult.updated,
+      sheetTabName: session.sheet_tab_name,
+      recordKey: record.record_key
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function markAuditRecordUndone_(sheet, sessionId, recordKey, undoneAt) {
+  if (!sheet) {
+    return false;
+  }
+  const headerMap = getHeaderMap_(sheet);
+  const sessionColumn = headerMap["session_id"];
+  const recordKeyColumn = headerMap["record_key"];
+  const statusColumn = headerMap["status"];
+  const undoneAtColumn = headerMap["undone_at"];
+  const lastRow = sheet.getLastRow();
+
+  if (!sessionColumn || !recordKeyColumn || !statusColumn || !undoneAtColumn || lastRow < 2) {
+    return false;
+  }
+
+  const values = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    const row = values[index];
+    if (String(row[sessionColumn - 1] || "").trim() === sessionId &&
+        String(row[recordKeyColumn - 1] || "").trim() === recordKey) {
+      const rowNumber = index + 2;
+      sheet.getRange(rowNumber, statusColumn).setValue("undone");
+      sheet.getRange(rowNumber, undoneAtColumn).setValue(undoneAt);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function undoAuditScan_(payload) {
+  const sessionId = String(payload.sessionId || "").trim();
+  const recordKey = String(payload.recordKey || "").trim();
+
+  if (!sessionId) {
+    throw new Error("Audit session is required.");
+  }
+  if (!recordKey) {
+    throw new Error("Scan record key is required.");
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+
+  try {
+    const session = getAuditSessionById_(sessionId);
+    const undoneAt = new Date();
+    const sessionSheet = getSpreadsheet_().getSheetByName(session.sheet_tab_name);
+    const changedSessionSheet = markAuditRecordUndone_(sessionSheet, sessionId, recordKey, undoneAt);
+    const changedIndexSheet = markAuditRecordUndone_(getAuditScansSheet_(), sessionId, recordKey, undoneAt);
+    SpreadsheetApp.flush();
+
+    return {
+      undone: changedSessionSheet || changedIndexSheet,
+      sheetTabName: session.sheet_tab_name,
+      recordKey: recordKey
+    };
   } finally {
     lock.releaseLock();
   }
