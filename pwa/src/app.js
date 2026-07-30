@@ -34,9 +34,11 @@ const elements = {
   auditSessionNameInput: document.querySelector("#auditSessionNameInput"),
   captureAuditQrButton: document.querySelector("#captureAuditQrButton"),
   stopAuditButton: document.querySelector("#stopAuditButton"),
+  auditSummaryButton: document.querySelector("#auditSummaryButton"),
   auditSessionText: document.querySelector("#auditSessionText"),
   auditScanCount: document.querySelector("#auditScanCount"),
   auditStatusText: document.querySelector("#auditStatusText"),
+  auditSummaryPanel: document.querySelector("#auditSummaryPanel"),
   auditLog: document.querySelector("#auditLog"),
   cacheStatusText: document.querySelector("#cacheStatusText"),
   decodedPanel: document.querySelector("#decodedPanel"),
@@ -57,6 +59,7 @@ let cart = JSON.parse(sessionStorage.getItem("scannerCart") || "[]");
 let auditSession = JSON.parse(sessionStorage.getItem("auditSession") || "null");
 let auditScanCount = Number(sessionStorage.getItem("auditScanCount") || 0);
 let auditLog = JSON.parse(sessionStorage.getItem("auditLog") || "[]");
+let auditSummary = JSON.parse(sessionStorage.getItem("auditSummary") || "null");
 auditLog = auditLog.map((entry) => {
   if (entry.status === "syncing") return { ...entry, status: "pending", message: "Queued" };
   if (entry.status === "undoing") return { ...entry, status: "synced", message: "Synced" };
@@ -287,6 +290,49 @@ function saveAuditState() {
   sessionStorage.setItem("auditSession", JSON.stringify(auditSession));
   sessionStorage.setItem("auditScanCount", String(auditScanCount));
   sessionStorage.setItem("auditLog", JSON.stringify(auditLog));
+  sessionStorage.setItem("auditSummary", JSON.stringify(auditSummary));
+}
+
+function auditStatusLabel(status) {
+  return {
+    "match": "Match",
+    "short": "Short",
+    "over": "Over",
+    "not-in-sheet": "Not in sheet",
+    "collectr-error": "Collectr issue"
+  }[status] || "Issue";
+}
+
+function renderAuditSummary() {
+  if (!auditSummary) {
+    elements.auditSummaryPanel.hidden = true;
+    elements.auditSummaryPanel.innerHTML = "";
+    return;
+  }
+  const totals = auditSummary.totals || {};
+  const rows = Array.isArray(auditSummary.rows) ? auditSummary.rows : [];
+  const issueRows = rows.filter((row) => row.status !== "match");
+  const visibleRows = (issueRows.length ? issueRows : rows).slice(0, 30);
+  elements.auditSummaryPanel.hidden = false;
+  elements.auditSummaryPanel.innerHTML = `<div class="audit-review-totals">
+    <div><span>Unique</span><strong>${Number(totals.uniqueCount || 0)}</strong></div>
+    <div><span>Issues</span><strong>${Number(totals.issueCount || 0)}</strong></div>
+    <div><span>Sheet qty</span><strong>${Number(totals.sheetQuantity || 0)}</strong></div>
+    <div><span>Collectr qty</span><strong>${Number(totals.collectrQuantity || 0)}</strong></div>
+  </div>
+  <div class="audit-review-list">
+    ${visibleRows.length ? visibleRows.map((row) => {
+      const item = row.item || {};
+      const title = item.name || row.cardId || "Unknown card";
+      const meta = [item.portfolioName || row.collectrPortfolioName, item.setName, item.cardNumber].filter(Boolean).join(" | ");
+      const collectrText = row.collectrError ? "Collectr: " + row.collectrError : "Collectr " + (row.collectrQuantity ?? "-");
+      return `<div class="audit-review-row ${row.status === "match" ? "" : "issue"}">
+        <div><strong>${escapeHtml(title)}</strong><span>${escapeHtml(meta || row.cardId)}</span></div>
+        <div class="audit-review-counts"><span>Scanned ${Number(row.scannedCount || 0)}</span><span>Sheet ${Number(row.sheetQuantity || 0)}</span><span>${escapeHtml(collectrText)}</span></div>
+        <b>${escapeHtml(auditStatusLabel(row.status))}</b>
+      </div>`;
+    }).join("") : `<div class="audit-review-empty">No scans recorded for this session.</div>`}
+  </div>`;
 }
 
 function renderAuditState() {
@@ -294,6 +340,7 @@ function renderAuditState() {
   elements.auditScanCount.textContent = auditScanCount;
   elements.auditStatusText.textContent = auditSession ? "Active" : "Inactive";
   elements.stopAuditButton.disabled = !auditSession;
+  elements.auditSummaryButton.disabled = !auditSession && !(auditSummary && auditSummary.session);
   elements.captureAuditQrButton.disabled = !auditSession || !pendingAuditCardId;
   elements.auditSessionText.textContent = auditSession
     ? "Active: " + auditSession.session_name + " -> " + auditSession.sheet_tab_name
@@ -312,8 +359,7 @@ function renderAuditState() {
       const canUndo = entry.status === "synced";
       const canRetry = entry.status === "error" || entry.status === "undo_error";
       return `<div class="audit-entry ${entry.kind || ""}">
-        <strong>${escapeHtml(entry.name || "Unknown card")}</strong>
-        <small>${escapeHtml(subtitle)}</small>
+        <div class="audit-entry-copy"><strong>${escapeHtml(entry.name || "Unknown card")}</strong><small>${escapeHtml(subtitle)}</small></div>
         <span>${escapeHtml(entry.message || "Recorded")}</span>
         <div class="audit-entry-actions">
           ${canCancel ? `<button type="button" class="secondary compact-button" data-audit-action="cancel" data-record-key="${escapeHtml(entry.recordKey)}">Cancel</button>` : ""}
@@ -323,6 +369,7 @@ function renderAuditState() {
       </div>`;
     }).join("")
     : "Start an audit session and scan labels.";
+  renderAuditSummary();
 }
 
 function addAuditLogEntry(entry) {
@@ -368,6 +415,7 @@ async function startAuditSession(sessionName) {
   auditSession = data.session;
   auditScanCount = 0;
   auditLog = [];
+  auditSummary = null;
   saveAuditState();
   renderAuditState();
 }
@@ -387,6 +435,26 @@ async function stopAuditSession() {
   auditSession = null;
   saveAuditState();
   renderAuditState();
+}
+
+async function loadAuditSummary(sessionId) {
+  const normalizedSessionId = String(sessionId || auditSession && auditSession.session_id || auditSummary && auditSummary.session && auditSummary.session.session_id || "").trim();
+  if (!normalizedSessionId) throw new Error("Audit session is required.");
+  const response = await fetch("/api/audit/summary", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-App-Pin": pin },
+    body: JSON.stringify({ sessionId: normalizedSessionId })
+  });
+  const data = await response.json();
+  if (response.status === 401) {
+    lock();
+    throw new Error("Scanner PIN expired. Unlock the app again.");
+  }
+  if (!response.ok || !data.ok) throw new Error(data.error || "Unable to load audit summary.");
+  auditSummary = data.summary;
+  saveAuditState();
+  renderAuditState();
+  return auditSummary;
 }
 
 function buildAuditScanEntry(cardId, sessionId) {
@@ -846,9 +914,25 @@ elements.auditSessionForm.addEventListener("submit", async (event) => {
 elements.stopAuditButton.addEventListener("click", async () => {
   elements.auditSessionText.textContent = "Stopping audit...";
   try {
+    const sessionId = auditSession && auditSession.session_id;
     await stopAuditSession();
-    setStatus("Audit stopped");
-    elements.cameraMessage.textContent = "Audit session stopped.";
+    if (sessionId) {
+      elements.auditSessionText.textContent = "Loading audit review...";
+      await loadAuditSummary(sessionId);
+    }
+    setStatus("Audit review ready", "success");
+    elements.cameraMessage.textContent = "Audit session stopped. Review issues below.";
+  } catch (error) {
+    setErrorStatus("Audit error", error.message);
+    elements.auditSessionText.textContent = error.message;
+  }
+});
+elements.auditSummaryButton.addEventListener("click", async () => {
+  elements.auditSessionText.textContent = "Loading audit review...";
+  try {
+    await loadAuditSummary();
+    setStatus("Audit review ready", "success");
+    elements.cameraMessage.textContent = "Audit review loaded.";
   } catch (error) {
     setErrorStatus("Audit error", error.message);
     elements.auditSessionText.textContent = error.message;

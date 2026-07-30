@@ -152,6 +152,10 @@ function doPost(e) {
       return jsonResponse_({ ok: true, result: undoAuditScan_(payload) });
     }
 
+    if (path === "audit/summary") {
+      return jsonResponse_({ ok: true, summary: getAuditSummary_(payload) });
+    }
+
     return jsonResponse_({ ok: false, error: "Unknown POST path: " + path });
   } catch (error) {
     return jsonResponse_({ ok: false, error: error.message });
@@ -1150,6 +1154,101 @@ function undoAuditScan_(payload) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function getAuditScanRowsForSession_(session) {
+  const sheet = getSpreadsheet_().getSheetByName(session.sheet_tab_name) || getAuditScansSheet_();
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) {
+    return [];
+  }
+
+  const headers = values[0];
+  return values.slice(1).filter(function (row) {
+    return String(getHeaderValue_(row, headers, ["session_id"]) || "").trim() === String(session.session_id || "").trim();
+  }).map(function (row) {
+    return {
+      cardId: String(getHeaderValue_(row, headers, ["card_id"]) || "").trim(),
+      status: String(getHeaderValue_(row, headers, ["status"]) || "").trim().toLowerCase(),
+      scannedAt: getHeaderValue_(row, headers, ["scanned_at"]),
+      recordKey: String(getHeaderValue_(row, headers, ["record_key"]) || "").trim()
+    };
+  });
+}
+
+function getAuditSummaryStatus_(scannedCount, sheetQuantity, item) {
+  if (!item) {
+    return "not-in-sheet";
+  }
+  if (scannedCount === sheetQuantity) {
+    return "match";
+  }
+  return scannedCount > sheetQuantity ? "over" : "short";
+}
+
+function getAuditSummary_(payload) {
+  const sessionId = String(payload.sessionId || "").trim();
+  if (!sessionId) {
+    throw new Error("Audit session is required.");
+  }
+
+  const session = getAuditSessionById_(sessionId);
+  const scans = getAuditScanRowsForSession_(session);
+  const activeScans = scans.filter(function (scan) {
+    return scan.cardId && scan.status !== "undone";
+  });
+  const grouped = {};
+
+  activeScans.forEach(function (scan) {
+    const normalizedCardId = scan.cardId.toUpperCase();
+    if (!grouped[normalizedCardId]) {
+      grouped[normalizedCardId] = {
+        cardId: scan.cardId,
+        scannedCount: 0,
+        recordKeys: []
+      };
+    }
+    grouped[normalizedCardId].scannedCount += 1;
+    grouped[normalizedCardId].recordKeys.push(scan.recordKey);
+  });
+
+  const rows = Object.keys(grouped).sort().map(function (cardId) {
+    const group = grouped[cardId];
+    const item = getInventoryLookupItem_(group.cardId);
+    const sheetQuantity = item ? Number(item.quantity || 0) : 0;
+    return {
+      cardId: group.cardId,
+      scannedCount: group.scannedCount,
+      sheetQuantity: sheetQuantity,
+      sheetDifference: group.scannedCount - sheetQuantity,
+      status: getAuditSummaryStatus_(group.scannedCount, sheetQuantity, item),
+      item: item,
+      recordKeys: group.recordKeys
+    };
+  });
+
+  const totals = rows.reduce(function (output, row) {
+    output.scannedCount += row.scannedCount;
+    output.uniqueCount += 1;
+    output.issueCount += row.status === "match" ? 0 : 1;
+    output.sheetQuantity += row.sheetQuantity;
+    return output;
+  }, {
+    scannedCount: 0,
+    uniqueCount: 0,
+    issueCount: 0,
+    sheetQuantity: 0
+  });
+
+  return {
+    session: serializeAuditSession_(session),
+    generatedAt: new Date().toISOString(),
+    scanCount: scans.length,
+    activeScanCount: activeScans.length,
+    undoneScanCount: scans.length - activeScans.length,
+    totals: totals,
+    rows: rows
+  };
 }
 
 function getSessionById_(sessionId) {

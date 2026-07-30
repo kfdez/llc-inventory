@@ -65,6 +65,7 @@
           </form>
           <div class="audit-actions">
             <button id="stopAuditButton" class="secondary" type="button" disabled>Stop audit</button>
+            <button id="auditSummaryButton" class="secondary" type="button" disabled>Review</button>
           </div>
           <p id="auditSessionText" class="sync-status">No active audit session.</p>
         </section>
@@ -115,6 +116,7 @@
           <div><span>Session scans</span><strong id="auditScanCount">0</strong></div>
           <div><span>Status</span><strong id="auditStatusText">Inactive</strong></div>
         </div>
+        <div id="auditSummaryPanel" class="audit-review" hidden></div>
         <div id="auditLog" class="audit-log empty">Start an audit session and scan labels.</div>
       </article>
     </section>

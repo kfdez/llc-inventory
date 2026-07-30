@@ -443,6 +443,75 @@ async function fetchCollectrOwnedProduct(env, portfolioId, productId) {
   return Array.isArray(data.data) ? data.data : [];
 }
 
+async function resolveCollectrItem(env, item) {
+  const portfolios = await fetchCollectrPortfolios(env);
+  const portfolioResolution = resolveCollectrPortfolio(item, portfolios);
+  if (!portfolioResolution.ok) {
+    const error = new Error(portfolioResolution.error);
+    error.status = 409;
+    error.portfolios = portfolios.map((portfolio) => ({ id: portfolio.id, name: portfolio.name }));
+    throw error;
+  }
+
+  const productResolution = await resolveCollectrProduct(env, item);
+  if (!productResolution.ok) {
+    const error = new Error(productResolution.error);
+    error.status = 409;
+    error.portfolio = {
+      id: portfolioResolution.portfolio.id,
+      name: portfolioResolution.portfolio.name || item.portfolioName || ""
+    };
+    throw error;
+  }
+
+  const ownedProducts = await fetchCollectrOwnedProduct(
+    env,
+    portfolioResolution.portfolio.id,
+    productResolution.product.product_id
+  );
+  const expectedSubtype = normalizeCollectrMatchValue(
+    productResolution.product.product_sub_type || item.collectrSubType || item.variance
+  );
+  const expectedGradeId = String(productResolution.product.grade_id || item.collectrGradeId || "").trim();
+  const ownedMatches = ownedProducts.filter((product) =>
+    String(product.product_id || "") === String(productResolution.product.product_id || "") &&
+    (!expectedSubtype || normalizeCollectrMatchValue(product.product_sub_type) === expectedSubtype) &&
+    (!expectedGradeId || String(product.grade_id || "") === expectedGradeId)
+  );
+  const selectedOwnedProduct = ownedMatches.length === 1 ? ownedMatches[0] :
+    ownedProducts.length === 1 ? ownedProducts[0] : null;
+
+  const warnings = portfolioResolution.warnings.slice();
+  if (ownedMatches.length > 1) warnings.push("Collectr owned product lookup returned multiple matching lines.");
+  if (!selectedOwnedProduct) warnings.push("Product is not currently present in the resolved Collectr portfolio.");
+
+  return {
+    portfolio: {
+      id: portfolioResolution.portfolio.id,
+      name: portfolioResolution.portfolio.name || item.portfolioName || "",
+      source: portfolioResolution.source
+    },
+    product: {
+      id: String(productResolution.product.product_id || ""),
+      name: productResolution.product.product_name || item.name || "",
+      setName: productResolution.product.catalog_group || item.setName || "",
+      cardNumber: productResolution.product.card_number || item.cardNumber || "",
+      subType: productResolution.product.product_sub_type || item.collectrSubType || item.variance || "",
+      gradeId: productResolution.product.grade_id || item.collectrGradeId || "",
+      userOwnedProductId: selectedOwnedProduct && selectedOwnedProduct.user_owned_product_id ||
+        productResolution.product.user_owned_product_id || item.collectrUserOwnedProductId || "",
+      source: productResolution.source
+    },
+    collectr: {
+      currentQuantity: selectedOwnedProduct ? Number(selectedOwnedProduct.quantity || 0) : 0,
+      ownedLineCount: ownedProducts.length,
+      matchedOwnedLineCount: ownedMatches.length,
+      currency: String(env.COLLECTR_CURRENCY || "CAD").trim().toUpperCase()
+    },
+    warnings
+  };
+}
+
 async function lookup(request, env) {
   const authorized = isAuthorized(request, env);
   if (!authorized.ok) return authorized.response;
@@ -602,80 +671,20 @@ async function resolveCollectrCard(request, env) {
   }
 
   try {
-    const portfolios = await fetchCollectrPortfolios(env);
-    const portfolioResolution = resolveCollectrPortfolio(item, portfolios);
-    if (!portfolioResolution.ok) {
-      return json({
-        ok: false,
-        error: portfolioResolution.error,
-        item,
-        portfolios: portfolios.map((portfolio) => ({ id: portfolio.id, name: portfolio.name }))
-      }, 409);
-    }
-
-    const productResolution = await resolveCollectrProduct(env, item);
-    if (!productResolution.ok) {
-      return json({
-        ok: false,
-        error: productResolution.error,
-        item,
-        portfolio: {
-          id: portfolioResolution.portfolio.id,
-          name: portfolioResolution.portfolio.name || item.portfolioName || ""
-        }
-      }, 409);
-    }
-
-    const ownedProducts = await fetchCollectrOwnedProduct(
-      env,
-      portfolioResolution.portfolio.id,
-      productResolution.product.product_id
-    );
-    const expectedSubtype = normalizeCollectrMatchValue(
-      productResolution.product.product_sub_type || item.collectrSubType || item.variance
-    );
-    const expectedGradeId = String(productResolution.product.grade_id || item.collectrGradeId || "").trim();
-    const ownedMatches = ownedProducts.filter((product) =>
-      String(product.product_id || "") === String(productResolution.product.product_id || "") &&
-      (!expectedSubtype || normalizeCollectrMatchValue(product.product_sub_type) === expectedSubtype) &&
-      (!expectedGradeId || String(product.grade_id || "") === expectedGradeId)
-    );
-    const selectedOwnedProduct = ownedMatches.length === 1 ? ownedMatches[0] :
-      ownedProducts.length === 1 ? ownedProducts[0] : null;
-
-    const warnings = portfolioResolution.warnings.slice();
-    if (ownedMatches.length > 1) warnings.push("Collectr owned product lookup returned multiple matching lines.");
-    if (!selectedOwnedProduct) warnings.push("Product is not currently present in the resolved Collectr portfolio.");
-
+    const resolved = await resolveCollectrItem(env, item);
     return json({
       ok: true,
       item,
-      portfolio: {
-        id: portfolioResolution.portfolio.id,
-        name: portfolioResolution.portfolio.name || item.portfolioName || "",
-        source: portfolioResolution.source
-      },
-      product: {
-        id: String(productResolution.product.product_id || ""),
-        name: productResolution.product.product_name || item.name || "",
-        setName: productResolution.product.catalog_group || item.setName || "",
-        cardNumber: productResolution.product.card_number || item.cardNumber || "",
-        subType: productResolution.product.product_sub_type || item.collectrSubType || item.variance || "",
-        gradeId: productResolution.product.grade_id || item.collectrGradeId || "",
-        userOwnedProductId: selectedOwnedProduct && selectedOwnedProduct.user_owned_product_id ||
-          productResolution.product.user_owned_product_id || item.collectrUserOwnedProductId || "",
-        source: productResolution.source
-      },
-      collectr: {
-        currentQuantity: selectedOwnedProduct ? Number(selectedOwnedProduct.quantity || 0) : 0,
-        ownedLineCount: ownedProducts.length,
-        matchedOwnedLineCount: ownedMatches.length,
-        currency: String(env.COLLECTR_CURRENCY || "CAD").trim().toUpperCase()
-      },
-      warnings
+      ...resolved
     });
   } catch (error) {
-    return json({ ok: false, error: "Collectr resolve failed: " + error.message, item }, 502);
+    return json({
+      ok: false,
+      error: "Collectr resolve failed: " + error.message,
+      item,
+      portfolio: error.portfolio,
+      portfolios: error.portfolios
+    }, error.status || 502);
   }
 }
 
@@ -777,6 +786,91 @@ async function undoAuditScan(request, env) {
   }
 }
 
+function getAuditSummaryStatus(row) {
+  if (!row.item) return "not-in-sheet";
+  if (row.collectrError) return row.status === "match" ? "collectr-error" : row.status;
+  if (row.collectrQuantity === null || row.collectrQuantity === undefined) return row.status;
+  if (Number(row.scannedCount || 0) === Number(row.sheetQuantity || 0) &&
+      Number(row.scannedCount || 0) === Number(row.collectrQuantity || 0)) {
+    return "match";
+  }
+  if (Number(row.scannedCount || 0) < Number(row.sheetQuantity || 0) ||
+      Number(row.scannedCount || 0) < Number(row.collectrQuantity || 0)) {
+    return "short";
+  }
+  return "over";
+}
+
+async function enrichAuditSummaryWithCollectr(env, summary) {
+  const rows = Array.isArray(summary.rows) ? summary.rows : [];
+  const enrichedRows = [];
+  for (const row of rows) {
+    const next = {
+      ...row,
+      collectrQuantity: null,
+      collectrDifference: null,
+      collectrPortfolioName: "",
+      collectrProductId: "",
+      collectrWarnings: []
+    };
+    if (row.item) {
+      try {
+        const resolved = await resolveCollectrItem(env, row.item);
+        next.collectrQuantity = resolved.collectr.currentQuantity;
+        next.collectrDifference = Number(row.scannedCount || 0) - Number(resolved.collectr.currentQuantity || 0);
+        next.collectrPortfolioName = resolved.portfolio.name;
+        next.collectrProductId = resolved.product.id;
+        next.collectrWarnings = resolved.warnings;
+      } catch (error) {
+        next.collectrError = error.message;
+      }
+    }
+    next.status = getAuditSummaryStatus(next);
+    enrichedRows.push(next);
+  }
+
+  const totals = enrichedRows.reduce((output, row) => {
+    output.scannedCount += Number(row.scannedCount || 0);
+    output.uniqueCount += 1;
+    output.issueCount += row.status === "match" ? 0 : 1;
+    output.sheetQuantity += Number(row.sheetQuantity || 0);
+    output.collectrQuantity += Number(row.collectrQuantity || 0);
+    return output;
+  }, {
+    scannedCount: 0,
+    uniqueCount: 0,
+    issueCount: 0,
+    sheetQuantity: 0,
+    collectrQuantity: 0
+  });
+
+  return {
+    ...summary,
+    rows: enrichedRows,
+    totals
+  };
+}
+
+async function getAuditSummary(request, env) {
+  const authorized = isAuthorized(request, env);
+  if (!authorized.ok) return authorized.response;
+  let payload;
+  try {
+    payload = await request.json();
+  } catch (_) {
+    return json({ ok: false, error: "Invalid request body." }, 400);
+  }
+  const sessionId = String(payload.sessionId || "").trim();
+  if (!sessionId) return json({ ok: false, error: "Audit session is required." }, 400);
+  try {
+    const data = await appsScriptPost(env, "audit/summary", { sessionId });
+    const summary = await enrichAuditSummaryWithCollectr(env, data.summary);
+    return json({ ok: true, summary });
+  } catch (error) {
+    return json({ ok: false, error: "Audit summary failed: " + error.message }, 502);
+  }
+}
+
 async function cacheStatus(request, env, ctx) {
   const authorized = isAuthorized(request, env);
   if (!authorized.ok) return authorized.response;
@@ -845,6 +939,10 @@ export default {
     if (url.pathname === "/api/audit/undo") {
       if (request.method !== "POST") return json({ ok: false, error: "Method not allowed." }, 405);
       return undoAuditScan(request, env);
+    }
+    if (url.pathname === "/api/audit/summary") {
+      if (request.method !== "POST") return json({ ok: false, error: "Method not allowed." }, 405);
+      return getAuditSummary(request, env);
     }
     const response = await env.ASSETS.fetch(request);
     const headers = secureAssetHeaders(response.headers);
