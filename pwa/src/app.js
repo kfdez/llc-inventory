@@ -478,6 +478,10 @@ async function adjustCollectrQuantityFromAudit(cardId, targetQuantity) {
     throw new Error("Scanner PIN expired. Unlock the app again.");
   }
   if (!response.ok || !data.ok) throw new Error(data.error || "Unable to update Collectr quantity.");
+  if (data.result && data.result.verified === false) {
+    throw new Error("Collectr accepted the update, but API verification returned quantity " +
+      (data.result.collectr && data.result.collectr.verifiedQuantity) + ".");
+  }
   await loadAuditSummary();
 }
 

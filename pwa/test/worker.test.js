@@ -304,6 +304,7 @@ test("collectr resolve can call Collectr through the VPS proxy", async () => {
 test("collectr quantity update posts target quantity through the VPS proxy", async () => {
   const originalFetch = globalThis.fetch;
   const proxyBodies = [];
+  let wroteQuantity = false;
   globalThis.fetch = async (url, options = {}) => {
     const requestUrl = new URL(String(url));
 
@@ -353,7 +354,7 @@ test("collectr quantity update posts target quantity through the VPS proxy", asy
             data: [{
               product_id: "642585",
               user_owned_product_id: "owned-1",
-              quantity: "1",
+              quantity: wroteQuantity ? "4" : "1",
               grade_id: "52",
               product_sub_type: "Holofoil"
             }]
@@ -364,6 +365,7 @@ test("collectr quantity update posts target quantity through the VPS proxy", asy
         assert.equal(body.method, "POST");
         assert.equal(body.query.collectionId, "portfolio-1");
         assert.deepEqual(body.body, { subType: "Holofoil", gradeId: "52", quantity: 4 });
+        wroteQuantity = true;
         return Response.json({ ok: true, data: { ok: true } });
       }
     }
@@ -390,6 +392,8 @@ test("collectr quantity update posts target quantity through the VPS proxy", asy
     assert.equal(data.ok, true);
     assert.equal(data.result.collectr.previousQuantity, 1);
     assert.equal(data.result.collectr.currentQuantity, 4);
+    assert.equal(data.result.collectr.verifiedQuantity, 4);
+    assert.equal(data.result.verified, true);
     assert.ok(proxyBodies.some((body) => body.path === "/collections/account-1/products/642585" && body.method === "POST"));
   } finally {
     globalThis.fetch = originalFetch;

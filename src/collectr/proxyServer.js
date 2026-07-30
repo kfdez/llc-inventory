@@ -149,6 +149,16 @@ function startCollectrProxyServer({ config, logger }) {
         method,
         body: body.body || {}
       });
+      if (method !== "GET") {
+        logger.info({
+          method,
+          path: body.path,
+          collectionId: body.query && body.query.collectionId,
+          quantity: body.body && body.body.quantity,
+          subType: body.body && body.body.subType,
+          gradeId: body.body && body.body.gradeId
+        }, "Collectr proxy write succeeded.");
+      }
       sendJson(response, 200, { ok: true, data });
     } catch (error) {
       logger.warn({ err: error }, "Collectr proxy request failed.");

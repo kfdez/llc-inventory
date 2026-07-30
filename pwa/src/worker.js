@@ -547,15 +547,24 @@ async function setCollectrItemQuantity(env, item, targetQuantity) {
     body
   );
   collectrPortfolioCache = null;
+  const refreshedRows = await fetchCollectrOwnedProduct(env, resolved.portfolio.id, resolved.product.id);
+  const refreshedMatch = refreshedRows.find((product) =>
+    String(product.product_id || "") === String(resolved.product.id || "") &&
+    (!body.subType || normalizeCollectrMatchValue(product.product_sub_type) === normalizeCollectrMatchValue(body.subType)) &&
+    (!body.gradeId || String(product.grade_id || "") === String(body.gradeId))
+  ) || (refreshedRows.length === 1 ? refreshedRows[0] : null);
+  const verifiedQuantity = refreshedMatch ? Number(refreshedMatch.quantity || 0) : 0;
 
   return {
     ...resolved,
     collectr: {
       ...resolved.collectr,
       previousQuantity: resolved.collectr.currentQuantity,
-      currentQuantity: targetQuantity
+      currentQuantity: verifiedQuantity,
+      verifiedQuantity
     },
-    targetQuantity
+    targetQuantity,
+    verified: verifiedQuantity === targetQuantity
   };
 }
 
