@@ -185,6 +185,23 @@ test("collectr resolve maps portfolio by name and product by catalog search", as
       });
     }
 
+    if (requestUrl.pathname === "/collections/account-1/products/642585") {
+      return Response.json({
+        data: {
+          product_id: "642585",
+          product_name: "Crustle ",
+          catalog_group: "Black Bolt",
+          card_number: "130/086",
+          ungraded_sub_types: [{
+            product_sub_type: "Holofoil",
+            grade_id: "52",
+            quantity: 2,
+            user_owned_product_id: "owned-1"
+          }]
+        }
+      });
+    }
+
     throw new Error("Unexpected fetch: " + requestUrl.toString());
   };
 
@@ -256,6 +273,25 @@ test("collectr resolve can call Collectr through the VPS proxy", async () => {
               card_number: "130/086",
               product_sub_type: "Holofoil"
             }]
+          }
+        });
+      }
+      if (body.path === "/collections/account-1/products/642585") {
+        return Response.json({
+          ok: true,
+          data: {
+            data: {
+              product_id: "642585",
+              product_name: "Crustle ",
+              catalog_group: "Black Bolt",
+              card_number: "130/086",
+              ungraded_sub_types: [{
+                product_sub_type: "Holofoil",
+                grade_id: "52",
+                quantity: 3,
+                user_owned_product_id: "owned-1"
+              }]
+            }
           }
         });
       }
@@ -358,6 +394,25 @@ test("collectr quantity update posts target quantity through the VPS proxy", asy
               grade_id: "52",
               product_sub_type: "Holofoil"
             }]
+          }
+        });
+      }
+      if (body.path === "/collections/account-1/products/642585" && body.method !== "POST") {
+        return Response.json({
+          ok: true,
+          data: {
+            data: {
+              product_id: "642585",
+              product_name: "Crustle ",
+              catalog_group: "Black Bolt",
+              card_number: "130/086",
+              ungraded_sub_types: [{
+                product_sub_type: "Holofoil",
+                grade_id: "52",
+                quantity: wroteQuantity ? 4 : 1,
+                user_owned_product_id: "owned-1"
+              }]
+            }
           }
         });
       }

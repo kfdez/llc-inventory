@@ -455,6 +455,35 @@ async function fetchCollectrOwnedProduct(env, portfolioId, productId) {
   return Array.isArray(data.data) ? data.data : [];
 }
 
+function flattenCollectrProductDetailLines(data) {
+  const product = data && data.data ? data.data : {};
+  const groups = []
+    .concat(Array.isArray(product.ungraded_sub_types) ? product.ungraded_sub_types : [])
+    .concat(Array.isArray(product.graded_sub_types) ? product.graded_sub_types : [])
+    .concat(Array.isArray(product.product_sub_types) ? product.product_sub_types : []);
+  return groups.map((line) => ({
+    ...line,
+    product_id: product.product_id,
+    product_name: product.product_name,
+    catalog_group: product.catalog_group,
+    card_number: product.card_number,
+    product_sub_type: line.product_sub_type || line.subType || line.sub_type || "",
+    grade_id: line.grade_id || line.gradeId || "",
+    quantity: line.quantity || 0,
+    user_owned_product_id: line.user_owned_product_id || line.userOwnedProductId || ""
+  }));
+}
+
+async function fetchCollectrProductDetailLines(env, portfolioId, productId) {
+  const config = requireCollectrConfig(env);
+  const data = await collectrGetJson(env, "/collections/" + encodeURIComponent(config.accountId) + "/products/" + encodeURIComponent(productId), {
+    collectionId: portfolioId,
+    currency: config.currency,
+    details: "false"
+  });
+  return flattenCollectrProductDetailLines(data);
+}
+
 async function resolveCollectrItem(env, item) {
   const portfolios = await fetchCollectrPortfolios(env);
   const portfolioResolution = resolveCollectrPortfolio(item, portfolios);
@@ -476,11 +505,17 @@ async function resolveCollectrItem(env, item) {
     throw error;
   }
 
-  const ownedProducts = await fetchCollectrOwnedProduct(
+  const listOwnedProducts = await fetchCollectrOwnedProduct(
     env,
     portfolioResolution.portfolio.id,
     productResolution.product.product_id
   );
+  const detailOwnedProducts = await fetchCollectrProductDetailLines(
+    env,
+    portfolioResolution.portfolio.id,
+    productResolution.product.product_id
+  );
+  const ownedProducts = detailOwnedProducts.length ? detailOwnedProducts : listOwnedProducts;
   const expectedSubtype = normalizeCollectrMatchValue(
     productResolution.product.product_sub_type || item.collectrSubType || item.variance
   );
@@ -547,7 +582,7 @@ async function setCollectrItemQuantity(env, item, targetQuantity) {
     body
   );
   collectrPortfolioCache = null;
-  const refreshedRows = await fetchCollectrOwnedProduct(env, resolved.portfolio.id, resolved.product.id);
+  const refreshedRows = await fetchCollectrProductDetailLines(env, resolved.portfolio.id, resolved.product.id);
   const refreshedMatch = refreshedRows.find((product) =>
     String(product.product_id || "") === String(resolved.product.id || "") &&
     (!body.subType || normalizeCollectrMatchValue(product.product_sub_type) === normalizeCollectrMatchValue(body.subType)) &&
