@@ -19,6 +19,8 @@ const STATUS_REACTIONS = {
   failure: "\u274c"
 };
 
+const CAPTURE_COMMAND_NAME = "capture";
+
 function getCountReaction(count) {
   const numberReactions = {
     1: "1\ufe0f\u20e3",
@@ -50,12 +52,12 @@ async function removeBotReaction(message, emoji) {
 
 function buildCommands() {
   const captureCommand = new SlashCommandBuilder()
-    .setName("capture-v2")
-    .setDescription("Control v2 capture automation.")
+    .setName(CAPTURE_COMMAND_NAME)
+    .setDescription("Control inventory capture sessions.")
     .addSubcommand((subcommand) =>
       subcommand
         .setName("start")
-        .setDescription("Queue a v2 capture start job.")
+        .setDescription("Create and start a new capture thread under an organizer channel.")
         .addStringOption((option) =>
           option
             .setName("organizer")
@@ -77,26 +79,18 @@ function buildCommands() {
     .addSubcommand((subcommand) =>
       subcommand
         .setName("stop")
-        .setDescription("Queue a v2 capture stop job for the active session.")
+        .setDescription("Stop the active capture session.")
     )
     .addSubcommand((subcommand) =>
       subcommand
         .setName("status")
-        .setDescription("Show v2 capture automation status.")
+        .setDescription("Show the active capture session and thread status.")
     );
   return [captureCommand.toJSON()];
 }
 
-async function upsertGuildCommands(guild, commands) {
-  const existingCommands = await guild.commands.fetch();
-  for (const command of commands) {
-    const existing = existingCommands.find((candidate) => candidate.name === command.name);
-    if (existing) {
-      await guild.commands.edit(existing.id, command);
-    } else {
-      await guild.commands.create(command);
-    }
-  }
+async function replaceGuildCommands(guild, commands) {
+  await guild.commands.set(commands);
 }
 
 async function startDiscordBot({ config, logger, captureService }) {
@@ -125,8 +119,8 @@ async function startDiscordBot({ config, logger, captureService }) {
     }
     if (config.discord.guildId) {
       const guild = await client.guilds.fetch(config.discord.guildId);
-      await upsertGuildCommands(guild, buildCommands());
-      logger.info("Registered v2 Discord commands.");
+      await replaceGuildCommands(guild, buildCommands());
+      logger.info("Registered Discord commands.");
     }
   });
 
@@ -135,12 +129,12 @@ async function startDiscordBot({ config, logger, captureService }) {
       if (!interaction.isChatInputCommand || !interaction.isChatInputCommand()) {
         return;
       }
-      if (interaction.commandName !== "capture-v2") {
+      if (interaction.commandName !== CAPTURE_COMMAND_NAME) {
         return;
       }
       if (config.discord.commandsChannelId && interaction.channelId !== config.discord.commandsChannelId) {
         await interaction.reply({
-          content: "Use `/capture-v2` in the configured v2 commands channel.",
+          content: "Use `/capture` in the configured commands channel.",
           flags: MessageFlags.Ephemeral
         });
         return;
@@ -155,7 +149,7 @@ async function startDiscordBot({ config, logger, captureService }) {
         });
         await interaction.reply({
           content: [
-            "v2 capture start queued.",
+            "Capture start queued.",
             "Session ID: `" + result.session.id + "`",
             "Job ID: `" + result.job.id + "`",
             "State: `" + result.session.state + "`"
@@ -171,7 +165,7 @@ async function startDiscordBot({ config, logger, captureService }) {
         });
         await interaction.reply({
           content: [
-            "v2 capture stop queued.",
+            "Capture stop queued.",
             "Session ID: `" + result.session.id + "`",
             "Job ID: `" + result.job.id + "`",
             "State: `" + result.session.state + "`"
@@ -191,7 +185,7 @@ async function startDiscordBot({ config, logger, captureService }) {
               "Thread: " + (session.discordThreadId ? "`" + session.discordThreadId + "`" : "not created"),
               "Sheet tab: `" + (session.appsScriptSession.sheet_tab_name || "not started") + "`"
             ]
-          : ["No active or working v2 capture session."];
+          : ["No active or working capture session."];
         await interaction.reply({
           content: sessionLines.concat([
             "Recent jobs: " + status.recentJobs.length
@@ -203,7 +197,7 @@ async function startDiscordBot({ config, logger, captureService }) {
       logger.error({ err: error }, "Discord interaction failed.");
       if (interaction && !interaction.replied && !interaction.deferred) {
         await interaction.reply({
-          content: "v2 command failed: " + error.message,
+          content: "Capture command failed: " + error.message,
           flags: MessageFlags.Ephemeral
         }).catch(() => {});
       }
@@ -371,7 +365,7 @@ async function handleCaptureThreadMessage({ message, captureService, imageAnalys
 module.exports = {
   startDiscordBot,
   buildCommands,
-  upsertGuildCommands,
+  replaceGuildCommands,
   handleCaptureThreadMessage,
   isImageAttachment,
   getCountReaction
