@@ -1014,9 +1014,11 @@ function stopAuditSession_(payload) {
 }
 
 function buildAuditScanRecord_(payload) {
+  const scans = Array.isArray(payload.scans) ? payload.scans : [];
+  const scan = scans.length ? scans[0] : {};
   const sessionId = String(payload.sessionId || "").trim();
-  const cardId = String(payload.cardId || "").trim();
-  const recordKey = String(payload.recordKey || "").trim() || Utilities.getUuid();
+  const cardId = String(payload.cardId || scan.cardId || "").trim();
+  const recordKey = String(payload.recordKey || scan.recordKey || "").trim() || Utilities.getUuid();
   const timestampMs = Number(payload.sourceTimestampMs || Date.now());
 
   if (!sessionId) {

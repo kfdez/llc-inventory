@@ -54,6 +54,45 @@ test("POST-only endpoints reject wrong methods", async () => {
   assert.equal(data.ok, false);
 });
 
+test("audit scan forwards card ID in the Apps Script scan payload", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options = {}) => {
+    const body = JSON.parse(options.body);
+    assert.equal(body.path, "audit/scan");
+    assert.equal(body.payload.sessionId, "session-1");
+    assert.equal(body.payload.scans[0].cardId, "AL-S-E51F26CF");
+    assert.equal(body.payload.scans[0].recordKey, "record-1");
+    return Response.json({
+      ok: true,
+      result: {
+        appended: 1,
+        updated: 0,
+        sheetTabName: "Audit Log - Test",
+        recordKey: "record-1"
+      }
+    });
+  };
+
+  try {
+    const env = { APP_PIN: "482913", APPS_SCRIPT_API_BASE_URL: "https://script.example/exec" };
+    const response = await worker.fetch(new Request("https://scanner.test/api/audit/scan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-App-Pin": "482913" },
+      body: JSON.stringify({
+        sessionId: "session-1",
+        cardId: "AL-S-E51F26CF",
+        recordKey: "record-1"
+      })
+    }), env, {});
+    const data = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(data.ok, true);
+    assert.equal(data.result.recordKey, "record-1");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("collectr resolve requires Collectr configuration after inventory lookup", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
