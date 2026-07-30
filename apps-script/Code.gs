@@ -1,6 +1,10 @@
 const BOT_CONFIG_SHEET = "Bot Config";
 const CAPTURE_SESSIONS_SHEET = "CaptureSessions";
 const SALES_LOG_TEMPLATE_SHEET = "Sales Log - Template";
+const SINGLES_INVENTORY_SHEET = "Singles Inventory";
+const SLABS_INVENTORY_SHEET = "Slabs Inventory";
+const SINGLES_CARD_ID_COLUMN_INDEX = 17;
+const SLABS_CARD_ID_COLUMN_INDEX = 17;
 
 const SALES_LOG_HEADERS = [
   "Time",
@@ -58,6 +62,25 @@ function doGet(e) {
       });
     }
 
+    if (path === "inventory/lookup") {
+      return jsonResponse_({ ok: true, item: getInventoryLookupItem_(e.parameter.cardId) });
+    }
+
+    if (path === "inventory/lookup-snapshot") {
+      return jsonResponse_({ ok: true, snapshot: getInventoryLookupSnapshot_() });
+    }
+
+    if (path === "inventory/sticker-targets") {
+      return jsonResponse_({
+        ok: true,
+        result: getInventoryStickerTargets_({
+          cardId: e.parameter.cardId,
+          sheetName: e.parameter.sheetName,
+          rowNumber: e.parameter.rowNumber
+        })
+      });
+    }
+
     return jsonResponse_({ ok: false, error: "Unknown GET path: " + path });
   } catch (error) {
     return jsonResponse_({ ok: false, error: error.message });
@@ -80,6 +103,10 @@ function doPost(e) {
 
     if (path === "capture/scan") {
       return jsonResponse_({ ok: true, result: recordCaptureScans_(payload) });
+    }
+
+    if (path === "inventory/sticker-price") {
+      return jsonResponse_({ ok: true, result: updateInventoryStickerPrice_(payload) });
     }
 
     return jsonResponse_({ ok: false, error: "Unknown POST path: " + path });
@@ -168,6 +195,475 @@ function getHeaderMap_(sheet) {
     }
   });
   return byHeader;
+}
+
+function normalizeHeaderName_(value) {
+  return String(value || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function getHeaderIndexByCandidates_(headers, candidates) {
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    const directIndex = headers.indexOf(candidate);
+    if (directIndex !== -1) {
+      return directIndex;
+    }
+    const normalizedCandidate = normalizeHeaderName_(candidate);
+    for (let headerIndex = 0; headerIndex < headers.length; headerIndex += 1) {
+      if (normalizeHeaderName_(headers[headerIndex]) === normalizedCandidate) {
+        return headerIndex;
+      }
+    }
+  }
+  return -1;
+}
+
+function getHeaderValue_(row, headers, candidates) {
+  const index = getHeaderIndexByCandidates_(headers, candidates);
+  return index === -1 ? "" : row[index];
+}
+
+function getHeaderValueByPrefix_(row, headers, candidates) {
+  const normalizedCandidates = candidates.map(function (candidate) {
+    return String(candidate).toLowerCase();
+  });
+  for (let index = 0; index < headers.length; index += 1) {
+    const normalizedHeader = String(headers[index] || "").trim().toLowerCase();
+    if (normalizedCandidates.some(function (candidate) {
+      return normalizedHeader === candidate ||
+        normalizedHeader.indexOf(candidate + " ") === 0 ||
+        normalizedHeader.indexOf(candidate + " (") === 0;
+    })) {
+      return row[index];
+    }
+  }
+  return "";
+}
+
+function getInventoryIdColumnIndexes_(headers, preferredIdColumnIndex) {
+  const candidates = [
+    "generated_id",
+    "Generated ID",
+    "Card ID",
+    "card_id",
+    "ID",
+    "id",
+    "Inventory ID",
+    "inventory_id",
+    "Item ID",
+    "item_id"
+  ];
+  const indexes = [];
+
+  if (preferredIdColumnIndex) {
+    indexes.push(preferredIdColumnIndex - 1);
+  }
+
+  candidates.forEach(function (candidate) {
+    const headerIndex = getHeaderIndexByCandidates_(headers, [candidate]);
+    if (headerIndex !== -1 && indexes.indexOf(headerIndex) === -1) {
+      indexes.push(headerIndex);
+    }
+  });
+
+  return indexes;
+}
+
+function getInventoryIdFromRow_(row, headers, preferredIdColumnIndex) {
+  const idColumnIndexes = getInventoryIdColumnIndexes_(headers, preferredIdColumnIndex);
+  for (let index = 0; index < idColumnIndexes.length; index += 1) {
+    const value = String(row[idColumnIndexes[index]] || "").trim();
+    if (value) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function findInventoryRowByIdInSheet_(sheetName, cardId, preferredIdColumnIndex) {
+  const sheet = getSpreadsheet_().getSheetByName(sheetName);
+  if (!sheet) {
+    return null;
+  }
+
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
+  if (lastRow < 2 || lastColumn < 1) {
+    return null;
+  }
+
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
+  const idColumnIndexes = getInventoryIdColumnIndexes_(headers, preferredIdColumnIndex);
+  const normalizedCardId = String(cardId || "").trim();
+
+  for (let index = 0; index < idColumnIndexes.length; index += 1) {
+    const columnIndex = idColumnIndexes[index];
+    const match = sheet
+      .getRange(2, columnIndex + 1, lastRow - 1, 1)
+      .createTextFinder(normalizedCardId)
+      .matchEntireCell(true)
+      .matchCase(false)
+      .findNext();
+
+    if (match) {
+      const rowNumber = match.getRow();
+      return {
+        sheet: sheet,
+        sheetName: sheetName,
+        category: sheetName === SLABS_INVENTORY_SHEET ? "Slabs" : "Singles",
+        rowNumber: rowNumber,
+        row: sheet.getRange(rowNumber, 1, 1, lastColumn).getValues()[0],
+        headers: headers
+      };
+    }
+  }
+
+  return null;
+}
+
+function findInventoryByCardId_(cardId) {
+  return findInventoryRowByIdInSheet_(SINGLES_INVENTORY_SHEET, cardId, SINGLES_CARD_ID_COLUMN_INDEX) ||
+    findInventoryRowByIdInSheet_(SLABS_INVENTORY_SHEET, cardId, SLABS_CARD_ID_COLUMN_INDEX);
+}
+
+function buildInventoryLookupItem_(match, normalizedCardId) {
+  const fields = {};
+  match.headers.forEach(function (header, index) {
+    if (String(header || "").trim()) {
+      fields[String(header)] = match.row[index];
+    }
+  });
+
+  return {
+    cardId: normalizedCardId,
+    sheetName: match.sheetName,
+    rowNumber: match.rowNumber,
+    category: match.category,
+    name: getHeaderValue_(match.row, match.headers, ["Product Name", "Product", "Name", "Card Name"]),
+    setName: getHeaderValue_(match.row, match.headers, ["Set", "Set Name", "set_name"]),
+    cardNumber: getHeaderValue_(match.row, match.headers, ["Card Number", "card_number"]),
+    marketPrice: getHeaderValueByPrefix_(match.row, match.headers, ["Market Price", "Current Market Price"]),
+    suggestedPrice: getHeaderValue_(match.row, match.headers, ["Suggested Price", "Price", "Asking Price"]),
+    stickeredPrice: getHeaderValue_(match.row, match.headers, ["Stickered Price"]),
+    lastStickered: getHeaderValue_(match.row, match.headers, ["Last Stickered"]),
+    quantity: getHeaderValue_(match.row, match.headers, ["Quantity", "Qty", "QTY", "Available", "Available Quantity", "Count"]),
+    condition: getHeaderValue_(match.row, match.headers, ["Card Condition", "Condition"]),
+    variance: getHeaderValue_(match.row, match.headers, ["Variance", "Variant"]),
+    grade: getHeaderValue_(match.row, match.headers, ["Grade"]),
+    portfolioName: getHeaderValue_(match.row, match.headers, ["Portfolio Name", "Portfolio", "Owner"]),
+    imageUrl: getHeaderValue_(match.row, match.headers, ["Image URL", "Image Link", "image_url"]),
+    fields: fields
+  };
+}
+
+function getInventoryLookupItem_(cardId) {
+  const normalizedCardId = String(cardId || "").trim();
+  if (!normalizedCardId) {
+    throw new Error("Card ID is required.");
+  }
+
+  const cache = CacheService.getScriptCache();
+  const cacheKey = "inventory-lookup:" + normalizedCardId.toUpperCase();
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    return JSON.parse(cached);
+  }
+
+  const match = findInventoryByCardId_(normalizedCardId);
+  if (!match) {
+    return null;
+  }
+
+  const item = buildInventoryLookupItem_(match, normalizedCardId);
+  cache.put(cacheKey, JSON.stringify(item), 60);
+  return item;
+}
+
+function getInventoryLookupSnapshot_() {
+  const startedAt = new Date();
+  const itemsById = {};
+  const duplicateIds = [];
+  let rowCount = 0;
+
+  [
+    { sheetName: SINGLES_INVENTORY_SHEET, preferredIdColumnIndex: SINGLES_CARD_ID_COLUMN_INDEX },
+    { sheetName: SLABS_INVENTORY_SHEET, preferredIdColumnIndex: SLABS_CARD_ID_COLUMN_INDEX }
+  ].forEach(function (source) {
+    const sheet = getSpreadsheet_().getSheetByName(source.sheetName);
+    if (!sheet) {
+      return;
+    }
+
+    const lastRow = sheet.getLastRow();
+    const lastColumn = sheet.getLastColumn();
+    if (lastRow < 2 || lastColumn < 1) {
+      return;
+    }
+
+    const values = sheet.getRange(1, 1, lastRow, lastColumn).getValues();
+    const headers = values[0];
+    const idColumnIndexes = getInventoryIdColumnIndexes_(headers, source.preferredIdColumnIndex);
+
+    for (let rowIndex = 1; rowIndex < values.length; rowIndex += 1) {
+      const row = values[rowIndex];
+      if (!row.some(function (cell) { return cell !== ""; })) {
+        continue;
+      }
+      rowCount += 1;
+
+      const cardIds = [];
+      idColumnIndexes.forEach(function (columnIndex) {
+        const cardId = String(row[columnIndex] || "").trim();
+        if (cardId && cardIds.indexOf(cardId) === -1) {
+          cardIds.push(cardId);
+        }
+      });
+      if (!cardIds.length) {
+        continue;
+      }
+
+      const match = {
+        sheet: sheet,
+        sheetName: source.sheetName,
+        category: source.sheetName === SLABS_INVENTORY_SHEET ? "Slabs" : "Singles",
+        rowNumber: rowIndex + 1,
+        row: row,
+        headers: headers
+      };
+
+      cardIds.forEach(function (cardId) {
+        const normalizedCardId = cardId.toUpperCase();
+        if (itemsById[normalizedCardId]) {
+          duplicateIds.push(cardId);
+          return;
+        }
+        itemsById[normalizedCardId] = buildInventoryLookupItem_(match, cardId);
+      });
+    }
+  });
+
+  return {
+    generatedAt: startedAt.toISOString(),
+    rowCount: rowCount,
+    itemCount: Object.keys(itemsById).length,
+    duplicateIds: duplicateIds,
+    itemsById: itemsById
+  };
+}
+
+function findInventoryMatchForStickerUpdate_(payload, cardId) {
+  const sheetName = String(payload.sheetName || "").trim();
+  const rowNumber = Number(payload.rowNumber || 0);
+  if ([SINGLES_INVENTORY_SHEET, SLABS_INVENTORY_SHEET].indexOf(sheetName) !== -1 && rowNumber > 1) {
+    const sheet = getSpreadsheet_().getSheetByName(sheetName);
+    if (sheet && rowNumber <= sheet.getLastRow()) {
+      const lastColumn = sheet.getLastColumn();
+      const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
+      const row = sheet.getRange(rowNumber, 1, 1, lastColumn).getValues()[0];
+      const preferredIdColumn = sheetName === SLABS_INVENTORY_SHEET ? SLABS_CARD_ID_COLUMN_INDEX : SINGLES_CARD_ID_COLUMN_INDEX;
+      const idColumnIndexes = getInventoryIdColumnIndexes_(headers, preferredIdColumn);
+      const verified = idColumnIndexes.some(function (columnIndex) {
+        return String(row[columnIndex] || "").trim().toUpperCase() === cardId.toUpperCase();
+      });
+      if (verified) {
+        return {
+          sheet: sheet,
+          sheetName: sheetName,
+          category: sheetName === SLABS_INVENTORY_SHEET ? "Slabs" : "Singles",
+          rowNumber: rowNumber,
+          row: row,
+          headers: headers
+        };
+      }
+    }
+  }
+  return findInventoryByCardId_(cardId);
+}
+
+function getInventoryIdentity_(row, headers, sheetName) {
+  return {
+    sheetName: sheetName,
+    portfolioName: String(getHeaderValue_(row, headers, ["Portfolio Name", "Portfolio", "Owner"]) || "").trim(),
+    setName: String(getHeaderValue_(row, headers, ["Set", "Set Name", "set_name"]) || "").trim(),
+    productName: String(getHeaderValue_(row, headers, ["Product Name", "Product", "Name", "Card Name"]) || "").trim(),
+    cardNumber: String(getHeaderValue_(row, headers, ["Card Number", "Number", "card_number"]) || "").trim(),
+    rarity: String(getHeaderValue_(row, headers, ["Rarity"]) || "").trim(),
+    variance: String(getHeaderValue_(row, headers, ["Variance", "Variant"]) || "").trim(),
+    grade: String(getHeaderValue_(row, headers, ["Grade"]) || "").trim(),
+    condition: String(getHeaderValue_(row, headers, ["Card Condition", "Condition"]) || "").trim(),
+    quantity: Number(getHeaderValue_(row, headers, ["Quantity", "Qty", "QTY", "Available", "Available Quantity", "Count"]) || 0)
+  };
+}
+
+function buildStickerPriceIdentityKey_(row, headers, sheetName) {
+  const identity = getInventoryIdentity_(row, headers, sheetName);
+  return [
+    identity.sheetName,
+    identity.setName,
+    identity.productName,
+    identity.cardNumber,
+    identity.rarity,
+    identity.variance,
+    identity.grade,
+    identity.condition
+  ].map(function (value) {
+    return String(value || "")
+      .replace(/\u00a0/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+  }).join("|");
+}
+
+function summarizeStickerTargetPortfolios_(match) {
+  const sheetValues = match.sheet.getDataRange().getValues();
+  const targetIdentityKey = buildStickerPriceIdentityKey_(match.row, match.headers, match.sheetName);
+  const countsByPortfolio = {};
+  const quantityByPortfolio = {};
+  let totalRows = 0;
+  for (let rowIndex = 1; rowIndex < sheetValues.length; rowIndex += 1) {
+    const row = sheetValues[rowIndex];
+    if (buildStickerPriceIdentityKey_(row, match.headers, match.sheetName) !== targetIdentityKey) {
+      continue;
+    }
+    const portfolioName = String(getHeaderValue_(row, match.headers, ["Portfolio Name", "Owner"]) || "Not specified").trim();
+    countsByPortfolio[portfolioName] = (countsByPortfolio[portfolioName] || 0) + 1;
+    quantityByPortfolio[portfolioName] = (quantityByPortfolio[portfolioName] || 0) + Number(
+      getHeaderValue_(row, match.headers, ["Quantity", "Qty", "QTY", "Available", "Available Quantity", "Count"]) || 0
+    );
+    totalRows += 1;
+  }
+  return {
+    totalRows: totalRows,
+    portfolios: Object.keys(countsByPortfolio).sort().map(function (name) {
+      return { name: name, rowCount: countsByPortfolio[name], quantity: quantityByPortfolio[name] };
+    })
+  };
+}
+
+function getInventoryStickerTargets_(payload) {
+  const cardId = String(payload.cardId || "").trim();
+  if (!cardId) {
+    throw new Error("Card ID is required.");
+  }
+  const cache = CacheService.getScriptCache();
+  const cacheKey = "sticker-targets-v2:" + cardId.toUpperCase();
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    return JSON.parse(cached);
+  }
+  const match = findInventoryMatchForStickerUpdate_(payload, cardId);
+  if (!match) {
+    throw new Error("Card ID not found in Singles Inventory or Slabs Inventory: " + cardId);
+  }
+  const result = summarizeStickerTargetPortfolios_(match);
+  cache.put(cacheKey, JSON.stringify(result), 60);
+  return result;
+}
+
+function updateInventoryStickerPrice_(payload) {
+  const cardId = String(payload.cardId || "").trim();
+  if (!cardId) {
+    throw new Error("Card ID is required.");
+  }
+
+  const rawPrice = payload.stickeredPrice;
+  const blankPrice = rawPrice === "" || rawPrice === null || rawPrice === undefined;
+  const stickeredPrice = blankPrice ? "" : Number(rawPrice);
+  if (!blankPrice && (!Number.isFinite(stickeredPrice) || stickeredPrice < 0)) {
+    throw new Error("Stickered Price must be a non-negative number or blank.");
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const match = findInventoryMatchForStickerUpdate_(payload, cardId);
+    if (!match) {
+      throw new Error("Card ID not found in Singles Inventory or Slabs Inventory: " + cardId);
+    }
+
+    const stickeredPriceColumn = match.headers.findIndex(function (header) {
+      return normalizeHeaderName_(header) === "stickeredprice";
+    });
+    const lastStickeredColumn = match.headers.findIndex(function (header) {
+      return normalizeHeaderName_(header) === "laststickered";
+    });
+    if (stickeredPriceColumn === -1 || lastStickeredColumn === -1) {
+      throw new Error("Inventory sheet must contain Stickered Price and Last Stickered columns.");
+    }
+
+    const sheetValues = match.sheet.getDataRange().getValues();
+    const targetIdentityKey = buildStickerPriceIdentityKey_(match.row, match.headers, match.sheetName);
+    const updatedAt = new Date();
+    const updates = [];
+    let matchedRows = 0;
+    const countsByPortfolio = {};
+    const quantityByPortfolio = {};
+
+    for (let rowIndex = 1; rowIndex < sheetValues.length; rowIndex += 1) {
+      const row = sheetValues[rowIndex];
+      if (buildStickerPriceIdentityKey_(row, match.headers, match.sheetName) !== targetIdentityKey) {
+        continue;
+      }
+      matchedRows += 1;
+      const portfolioName = String(getHeaderValue_(row, match.headers, ["Portfolio Name", "Owner"]) || "Not specified").trim();
+      countsByPortfolio[portfolioName] = (countsByPortfolio[portfolioName] || 0) + 1;
+      quantityByPortfolio[portfolioName] = (quantityByPortfolio[portfolioName] || 0) + Number(
+        getHeaderValue_(row, match.headers, ["Quantity", "Qty", "QTY", "Available", "Available Quantity", "Count"]) || 0
+      );
+      const currentValue = row[stickeredPriceColumn];
+      const currentBlank = currentValue === "" || currentValue === null || currentValue === undefined;
+      const rowChanged = blankPrice
+        ? !currentBlank
+        : currentBlank || Number(currentValue) !== stickeredPrice;
+      if (!rowChanged) {
+        continue;
+      }
+      row[stickeredPriceColumn] = stickeredPrice;
+      row[lastStickeredColumn] = updatedAt;
+      updates.push({ rowNumber: rowIndex + 1, row: row });
+    }
+
+    updates.forEach(function (update) {
+      if (Math.abs(stickeredPriceColumn - lastStickeredColumn) === 1) {
+        const firstColumn = Math.min(stickeredPriceColumn, lastStickeredColumn);
+        match.sheet.getRange(update.rowNumber, firstColumn + 1, 1, 2).setValues([[
+          update.row[firstColumn],
+          update.row[firstColumn + 1]
+        ]]);
+      } else {
+        match.sheet.getRange(update.rowNumber, stickeredPriceColumn + 1).setValue(stickeredPrice);
+        match.sheet.getRange(update.rowNumber, lastStickeredColumn + 1).setValue(updatedAt);
+      }
+      const updatedId = getInventoryIdFromRow_(update.row, match.headers, 0);
+      if (updatedId) {
+        CacheService.getScriptCache().remove("inventory-lookup:" + updatedId.toUpperCase());
+        CacheService.getScriptCache().remove("sticker-targets-v2:" + updatedId.toUpperCase());
+      }
+      if (update.rowNumber === match.rowNumber) {
+        match.row = update.row;
+      }
+    });
+
+    const item = buildInventoryLookupItem_(match, cardId);
+    CacheService.getScriptCache().put("inventory-lookup:" + cardId.toUpperCase(), JSON.stringify(item), 60);
+    return {
+      changed: updates.length > 0,
+      matchedRows: matchedRows,
+      changedRows: updates.length,
+      portfolios: Object.keys(countsByPortfolio).sort().map(function (name) {
+        return { name: name, rowCount: countsByPortfolio[name], quantity: quantityByPortfolio[name] };
+      }),
+      item: item
+    };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function formatLocalDateKey_(value) {
