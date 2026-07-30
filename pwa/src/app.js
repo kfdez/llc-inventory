@@ -326,10 +326,12 @@ function renderAuditSummary() {
       const title = item.name || row.cardId || "Unknown card";
       const meta = [item.portfolioName || row.collectrPortfolioName, item.setName, item.cardNumber].filter(Boolean).join(" | ");
       const collectrText = row.collectrError ? "Collectr: " + row.collectrError : "Collectr " + (row.collectrQuantity ?? "-");
+      const canAdjustCollectr = row.item && !row.collectrError && row.collectrQuantity !== null &&
+        Number(row.collectrQuantity || 0) !== Number(row.scannedCount || 0);
       return `<div class="audit-review-row ${row.status === "match" ? "" : "issue"}">
         <div><strong>${escapeHtml(title)}</strong><span>${escapeHtml(meta || row.cardId)}</span></div>
         <div class="audit-review-counts"><span>Scanned ${Number(row.scannedCount || 0)}</span><span>Sheet ${Number(row.sheetQuantity || 0)}</span><span>${escapeHtml(collectrText)}</span></div>
-        <b>${escapeHtml(auditStatusLabel(row.status))}</b>
+        <div class="audit-review-actions"><b>${escapeHtml(auditStatusLabel(row.status))}</b>${canAdjustCollectr ? `<button type="button" class="secondary compact-button" data-audit-action="adjust-collectr" data-card-id="${escapeHtml(row.cardId)}" data-target-quantity="${Number(row.scannedCount || 0)}">Set Collectr</button>` : ""}</div>
       </div>`;
     }).join("") : `<div class="audit-review-empty">No scans recorded for this session.</div>`}
   </div>`;
@@ -455,6 +457,28 @@ async function loadAuditSummary(sessionId) {
   saveAuditState();
   renderAuditState();
   return auditSummary;
+}
+
+async function adjustCollectrQuantityFromAudit(cardId, targetQuantity) {
+  const quantity = Number(targetQuantity);
+  if (!Number.isInteger(quantity) || quantity < 0) {
+    throw new Error("Target quantity must be a non-negative integer.");
+  }
+  if (!window.confirm("Set Collectr quantity for " + cardId + " to " + quantity + "?")) {
+    return;
+  }
+  const response = await fetch("/api/collectr/quantity", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-App-Pin": pin },
+    body: JSON.stringify({ cardId, targetQuantity: quantity })
+  });
+  const data = await response.json();
+  if (response.status === 401) {
+    lock();
+    throw new Error("Scanner PIN expired. Unlock the app again.");
+  }
+  if (!response.ok || !data.ok) throw new Error(data.error || "Unable to update Collectr quantity.");
+  await loadAuditSummary();
 }
 
 function buildAuditScanEntry(cardId, sessionId) {
@@ -954,6 +978,22 @@ elements.auditLog.addEventListener("click", (event) => {
   } else if (button.dataset.auditAction === "retry") {
     updateAuditLogEntry(recordKey, { status: "pending", kind: "", attempts: 0, message: "Queued" });
     void drainAuditSaveQueue();
+  }
+});
+elements.auditSummaryPanel.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-audit-action='adjust-collectr']");
+  if (!button) return;
+  button.disabled = true;
+  button.textContent = "Saving";
+  try {
+    await adjustCollectrQuantityFromAudit(button.dataset.cardId, button.dataset.targetQuantity);
+    setStatus("Collectr updated", "success");
+    elements.cameraMessage.textContent = "Collectr quantity updated and review refreshed.";
+  } catch (error) {
+    setErrorStatus("Collectr error", error.message);
+    elements.cameraMessage.textContent = error.message;
+    button.disabled = false;
+    button.textContent = "Set Collectr";
   }
 });
 function fillStickerPriceFrom(field) {

@@ -3,6 +3,7 @@ const http = require("http");
 const ALLOWED_COLLECTR_PATHS = [
   /^\/accounts\/[^/]+\/collections$/,
   /^\/collections\/[^/]+\/products$/,
+  /^\/collections\/[^/]+\/products\/[^/]+$/,
   /^\/catalog$/
 ];
 
@@ -78,18 +79,22 @@ function buildCollectrUrl(config, path, query = {}) {
   return url;
 }
 
-async function fetchCollectrJson(config, path, query = {}) {
+async function fetchCollectrJson(config, path, query = {}, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);
+  const method = String(options.method || "GET").toUpperCase();
   try {
     const response = await fetch(buildCollectrUrl(config, path, query), {
+      method,
       signal: controller.signal,
       headers: {
         "Accept": "application/json",
+        "Content-Type": "application/json",
         "Authorization": config.authToken,
         "Origin": "https://app.getcollectr.com",
         "Referer": "https://app.getcollectr.com/"
-      }
+      },
+      body: method === "GET" ? undefined : JSON.stringify(options.body || {})
     });
     const text = await response.text();
     let data;
@@ -136,7 +141,14 @@ function startCollectrProxyServer({ config, logger }) {
 
     try {
       const body = await readJsonBody(request);
-      const data = await fetchCollectrJson(config.collectrProxy, body.path, body.query || {});
+      const method = String(body.method || "GET").trim().toUpperCase();
+      if (["GET", "POST"].indexOf(method) === -1) {
+        throw new Error("Collectr method is not allowed.");
+      }
+      const data = await fetchCollectrJson(config.collectrProxy, body.path, body.query || {}, {
+        method,
+        body: body.body || {}
+      });
       sendJson(response, 200, { ok: true, data });
     } catch (error) {
       logger.warn({ err: error }, "Collectr proxy request failed.");

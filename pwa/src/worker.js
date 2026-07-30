@@ -257,8 +257,9 @@ function buildCollectrProxyUrl(proxyBaseUrl) {
   return new URL("collectr/api", normalizedBase);
 }
 
-async function collectrGetJson(env, path, query = {}) {
+async function collectrRequestJson(env, path, query = {}, options = {}) {
   const config = requireCollectrConfig(env);
+  const method = String(options.method || "GET").toUpperCase();
   if (config.proxyBaseUrl) {
     if (!config.proxySecret) {
       throw new Error("Collectr proxy secret is not configured.");
@@ -270,7 +271,7 @@ async function collectrGetJson(env, path, query = {}) {
         "Content-Type": "application/json",
         "X-Collectr-Proxy-Secret": config.proxySecret
       },
-      body: JSON.stringify({ path, query })
+      body: JSON.stringify({ path, query, method, body: options.body || {} })
     });
     const text = await response.text();
     let data;
@@ -297,12 +298,15 @@ async function collectrGetJson(env, path, query = {}) {
   });
 
   const response = await fetch(url, {
+    method,
     headers: {
       "Accept": "application/json",
+      "Content-Type": "application/json",
       "Authorization": config.token,
       "Origin": "https://app.getcollectr.com",
       "Referer": "https://app.getcollectr.com/"
-    }
+    },
+    body: method === "GET" ? undefined : JSON.stringify(options.body || {})
   });
   const text = await response.text();
   let data;
@@ -319,6 +323,14 @@ async function collectrGetJson(env, path, query = {}) {
     throw new Error(data.error || data.message || "Collectr request failed with HTTP " + response.status + ".");
   }
   return data;
+}
+
+function collectrGetJson(env, path, query = {}) {
+  return collectrRequestJson(env, path, query);
+}
+
+function collectrPostJson(env, path, query = {}, body = {}) {
+  return collectrRequestJson(env, path, query, { method: "POST", body });
 }
 
 async function fetchCollectrPortfolios(env) {
@@ -512,6 +524,39 @@ async function resolveCollectrItem(env, item) {
   };
 }
 
+async function setCollectrItemQuantity(env, item, targetQuantity) {
+  if (!Number.isInteger(targetQuantity) || targetQuantity < 0) {
+    throw new Error("Target quantity must be a non-negative integer.");
+  }
+  const resolved = await resolveCollectrItem(env, item);
+  if (!resolved.product.id || !resolved.portfolio.id) {
+    throw new Error("Collectr product and portfolio are required.");
+  }
+
+  const body = {
+    subType: resolved.product.subType || item.collectrSubType || item.variance || "",
+    gradeId: resolved.product.gradeId || item.collectrGradeId || "",
+    quantity: targetQuantity
+  };
+  await collectrPostJson(
+    env,
+    "/collections/" + encodeURIComponent(requireCollectrConfig(env).accountId) + "/products/" + encodeURIComponent(resolved.product.id),
+    { collectionId: resolved.portfolio.id },
+    body
+  );
+  collectrPortfolioCache = null;
+
+  return {
+    ...resolved,
+    collectr: {
+      ...resolved.collectr,
+      previousQuantity: resolved.collectr.currentQuantity,
+      currentQuantity: targetQuantity
+    },
+    targetQuantity
+  };
+}
+
 async function lookup(request, env) {
   const authorized = isAuthorized(request, env);
   if (!authorized.ok) return authorized.response;
@@ -685,6 +730,38 @@ async function resolveCollectrCard(request, env) {
       portfolio: error.portfolio,
       portfolios: error.portfolios
     }, error.status || 502);
+  }
+}
+
+async function adjustCollectrQuantity(request, env) {
+  const authorized = isAuthorized(request, env);
+  if (!authorized.ok) return authorized.response;
+  let payload;
+  try {
+    payload = await request.json();
+  } catch (_) {
+    return json({ ok: false, error: "Invalid request body." }, 400);
+  }
+  const cardId = String(payload.cardId || "").trim();
+  const targetQuantity = Number(payload.targetQuantity);
+  if (!cardId || cardId.length > 200) {
+    return json({ ok: false, error: "A valid Card ID is required." }, 400);
+  }
+  if (!Number.isInteger(targetQuantity) || targetQuantity < 0 || targetQuantity > 9999) {
+    return json({ ok: false, error: "Target quantity must be a non-negative integer." }, 400);
+  }
+
+  try {
+    await ensureInventorySnapshot(env);
+    const snapshotLookup = getInventorySnapshotLookup(cardId, { allowStale: true });
+    const item = snapshotLookup && snapshotLookup.item;
+    if (!item) {
+      return json({ ok: false, error: "No spreadsheet row matched " + cardId + "." }, 404);
+    }
+    const result = await setCollectrItemQuantity(env, item, targetQuantity);
+    return json({ ok: true, item, result });
+  } catch (error) {
+    return json({ ok: false, error: "Collectr quantity update failed: " + error.message }, 502);
   }
 }
 
@@ -923,6 +1000,10 @@ export default {
     if (url.pathname === "/api/collectr/resolve") {
       if (request.method !== "GET") return json({ ok: false, error: "Method not allowed." }, 405);
       return resolveCollectrCard(request, env);
+    }
+    if (url.pathname === "/api/collectr/quantity") {
+      if (request.method !== "POST") return json({ ok: false, error: "Method not allowed." }, 405);
+      return adjustCollectrQuantity(request, env);
     }
     if (url.pathname === "/api/audit/start") {
       if (request.method !== "POST") return json({ ok: false, error: "Method not allowed." }, 405);

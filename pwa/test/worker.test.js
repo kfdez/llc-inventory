@@ -300,3 +300,99 @@ test("collectr resolve can call Collectr through the VPS proxy", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("collectr quantity update posts target quantity through the VPS proxy", async () => {
+  const originalFetch = globalThis.fetch;
+  const proxyBodies = [];
+  globalThis.fetch = async (url, options = {}) => {
+    const requestUrl = new URL(String(url));
+
+    if (requestUrl.host === "script.example") {
+      assert.equal(requestUrl.searchParams.get("path"), "inventory/lookup-snapshot");
+      return Response.json({
+        ok: true,
+        snapshot: {
+          itemsById: {
+            "KYL-S-ABC12345": {
+              cardId: "KYL-S-ABC12345",
+              portfolioName: "KYL",
+              setName: "Black Bolt",
+              name: "Crustle",
+              cardNumber: "130/086",
+              variance: "Holofoil"
+            }
+          }
+        }
+      });
+    }
+
+    if (requestUrl.host === "proxy.example") {
+      const body = JSON.parse(options.body);
+      proxyBodies.push(body);
+      if (body.path.endsWith("/collections")) {
+        return Response.json({ ok: true, data: { data: [{ id: "portfolio-1", name: "KYL" }] } });
+      }
+      if (body.path === "/catalog") {
+        return Response.json({
+          ok: true,
+          data: {
+            data: [{
+              product_id: "642585",
+              catalog_group: "Black Bolt",
+              product_name: "Crustle ",
+              card_number: "130/086",
+              product_sub_type: "Holofoil",
+              grade_id: "52"
+            }]
+          }
+        });
+      }
+      if (body.path === "/collections/account-1/products" && body.method !== "POST") {
+        return Response.json({
+          ok: true,
+          data: {
+            data: [{
+              product_id: "642585",
+              user_owned_product_id: "owned-1",
+              quantity: "1",
+              grade_id: "52",
+              product_sub_type: "Holofoil"
+            }]
+          }
+        });
+      }
+      if (body.path === "/collections/account-1/products/642585") {
+        assert.equal(body.method, "POST");
+        assert.equal(body.query.collectionId, "portfolio-1");
+        assert.deepEqual(body.body, { subType: "Holofoil", gradeId: "52", quantity: 4 });
+        return Response.json({ ok: true, data: { ok: true } });
+      }
+    }
+
+    throw new Error("Unexpected fetch: " + requestUrl.toString());
+  };
+
+  try {
+    const env = {
+      APP_PIN: "482913",
+      APPS_SCRIPT_API_BASE_URL: "https://script.example/exec",
+      COLLECTR_ACCOUNT_ID: "account-1",
+      COLLECTR_PROXY_BASE_URL: "https://proxy.example/llc-inventory-v2-collectr/",
+      COLLECTR_PROXY_SECRET: "proxy-secret",
+      COLLECTR_CURRENCY: "CAD"
+    };
+    const response = await worker.fetch(new Request("https://scanner.test/api/collectr/quantity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-App-Pin": "482913" },
+      body: JSON.stringify({ cardId: "KYL-S-ABC12345", targetQuantity: 4 })
+    }), env, {});
+    const data = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(data.ok, true);
+    assert.equal(data.result.collectr.previousQuantity, 1);
+    assert.equal(data.result.collectr.currentQuantity, 4);
+    assert.ok(proxyBodies.some((body) => body.path === "/collections/account-1/products/642585" && body.method === "POST"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

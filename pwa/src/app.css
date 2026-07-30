@@ -700,6 +700,19 @@ summary {
   display: flex;
   gap: 8px;
 }
+.audit-review-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.audit-review-actions b {
+  font-size: .78rem;
+}
+.audit-review-actions .compact-button {
+  min-height: 30px;
+  padding: 4px 8px;
+}
 .audit-review-empty {
   color: var(--muted);
   text-align: center;
@@ -750,6 +763,10 @@ summary {
   .audit-entry > span, .audit-review-counts {
     grid-column: 1 / -1;
     max-width: none;
+  }
+  .audit-review-actions {
+    grid-column: 1 / -1;
+    justify-content: space-between;
   }
   .audit-review-totals {
     grid-template-columns: repeat(2, minmax(0, 1fr));
