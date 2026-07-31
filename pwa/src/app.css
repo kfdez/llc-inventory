@@ -684,6 +684,18 @@ summary {
   overscroll-behavior: contain;
   padding-right: 4px;
 }
+.audit-review-progress {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  padding: 8px 2px 10px;
+  font-size: .78rem;
+}
+.audit-review-progress span {
+  min-width: 0;
+}
 .audit-review-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
@@ -770,6 +782,9 @@ summary {
   }
   .audit-review {
     max-height: 62vh;
+  }
+  .audit-review-progress {
+    align-items: stretch;
   }
   .audit-entry > span, .audit-review-counts {
     grid-column: 1 / -1;

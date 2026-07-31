@@ -109,6 +109,8 @@ let auditSummary = readJsonStorage("auditSummary", null);
 if (!Array.isArray(cart)) cart = [];
 if (!Array.isArray(auditLog)) auditLog = [];
 let auditCollectrLoadRunning = false;
+let auditCollectrLoadStopped = false;
+let auditCollectrAbortController = null;
 let auditSummaryLoadVersion = 0;
 auditLog = auditLog.map((entry) => {
   if (entry.status === "syncing") return { ...entry, status: "pending", message: "Queued" };
@@ -401,7 +403,7 @@ function renderAuditSummary() {
     <div><span>Sheet qty</span><strong>${Number(totals.sheetQuantity || 0)}</strong></div>
     <div><span>Collectr qty</span><strong>${Number(totals.collectrQuantity || 0)}</strong></div>
   </div>
-  ${collectr.pendingCount || auditCollectrLoadRunning ? `<div class="audit-review-empty">Collectr check ${Number(collectr.loadedCount || 0)}/${Number((collectr.loadedCount || 0) + (collectr.pendingCount || 0))} loaded.</div>` : ""}
+  ${collectr.pendingCount || auditCollectrLoadRunning ? `<div class="audit-review-progress"><span>${auditCollectrLoadStopped ? "Collectr check stopped" : "Collectr check"} ${Number(collectr.loadedCount || 0)}/${Number((collectr.loadedCount || 0) + (collectr.pendingCount || 0))} loaded.</span>${auditCollectrLoadRunning ? `<button type="button" class="secondary compact-button" data-audit-action="stop-collectr-load">Stop</button>` : ""}</div>` : ""}
   <div class="audit-review-list">
     ${visibleRows.length ? visibleRows.map((row) => {
       const item = row.item || {};
@@ -600,10 +602,12 @@ async function stopAuditSession() {
 async function loadAuditSummary(sessionId) {
   const normalizedSessionId = String(sessionId || auditSession && auditSession.session_id || auditSummary && auditSummary.session && auditSummary.session.session_id || "").trim();
   if (!normalizedSessionId) throw new Error("Audit session is required.");
+  cancelAuditCollectrLoading({ render: false });
   const loadVersion = auditSummaryLoadVersion + 1;
   auditSummaryLoadVersion = loadVersion;
   auditSummary = null;
   auditCollectrLoadRunning = false;
+  auditCollectrLoadStopped = false;
   saveAuditState();
   renderAuditState();
   const response = await fetch("/api/audit/summary", {
@@ -624,6 +628,22 @@ async function loadAuditSummary(sessionId) {
   renderAuditState();
   void loadAuditCollectrSummaryBatches(normalizedSessionId, loadVersion);
   return auditSummary;
+}
+
+function cancelAuditCollectrLoading(options = {}) {
+  const wasRunning = auditCollectrLoadRunning || auditCollectrAbortController;
+  auditSummaryLoadVersion += 1;
+  auditCollectrLoadRunning = false;
+  auditCollectrLoadStopped = true;
+  if (auditCollectrAbortController) {
+    auditCollectrAbortController.abort();
+    auditCollectrAbortController = null;
+  }
+  if ((options.render !== false) && (wasRunning || auditSummary)) {
+    recomputeAuditSummaryTotals();
+    saveAuditState();
+    renderAuditState();
+  }
 }
 
 function getPendingAuditCollectrCardIds() {
@@ -667,17 +687,21 @@ function markAuditCollectrRowsFailed(cardIds, message) {
 async function loadAuditCollectrSummaryBatches(sessionId, loadVersion = auditSummaryLoadVersion) {
   if (auditCollectrLoadRunning) return;
   auditCollectrLoadRunning = true;
+  auditCollectrLoadStopped = false;
   renderAuditSummary();
   try {
     while (loadVersion === auditSummaryLoadVersion && auditSummary && auditSummary.session && auditSummary.session.session_id === sessionId) {
       const batchSize = Number(auditSummary.collectr && auditSummary.collectr.batchSize || 6);
       const cardIds = getPendingAuditCollectrCardIds().slice(0, Math.min(Math.max(batchSize, 1), 6));
       if (!cardIds.length) break;
+      auditCollectrAbortController = new AbortController();
       const response = await fetch("/api/audit/collectr-summary", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-App-Pin": pin },
-        body: JSON.stringify({ sessionId, cardIds })
+        body: JSON.stringify({ sessionId, cardIds }),
+        signal: auditCollectrAbortController.signal
       });
+      auditCollectrAbortController = null;
       const data = await response.json();
       if (response.status === 401) {
         lock();
@@ -692,7 +716,13 @@ async function loadAuditCollectrSummaryBatches(sessionId, loadVersion = auditSum
       mergeAuditCollectrRows(data.rows);
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
+  } catch (error) {
+    if (error && error.name !== "AbortError") {
+      setErrorStatus("Collectr check issue", error.message);
+      elements.cameraMessage.textContent = error.message;
+    }
   } finally {
+    auditCollectrAbortController = null;
     if (loadVersion === auditSummaryLoadVersion) {
       auditCollectrLoadRunning = false;
       recomputeAuditSummaryTotals();
@@ -1228,6 +1258,13 @@ elements.auditLog.addEventListener("click", (event) => {
   }
 });
 elements.auditSummaryPanel.addEventListener("click", async (event) => {
+  const stopButton = event.target.closest("button[data-audit-action='stop-collectr-load']");
+  if (stopButton) {
+    cancelAuditCollectrLoading();
+    setStatus("Collectr check stopped", "success");
+    elements.cameraMessage.textContent = "Collectr quantity loading stopped for this review.";
+    return;
+  }
   const button = event.target.closest("button[data-audit-action='adjust-collectr']");
   if (!button) return;
   button.disabled = true;
