@@ -109,6 +109,7 @@ let auditSummary = readJsonStorage("auditSummary", null);
 if (!Array.isArray(cart)) cart = [];
 if (!Array.isArray(auditLog)) auditLog = [];
 let auditCollectrLoadRunning = false;
+let auditSummaryLoadVersion = 0;
 auditLog = auditLog.map((entry) => {
   if (entry.status === "syncing") return { ...entry, status: "pending", message: "Queued" };
   if (entry.status === "undoing") return { ...entry, status: "synced", message: "Synced" };
@@ -392,7 +393,7 @@ function renderAuditSummary() {
   const collectr = auditSummary.collectr || {};
   const rows = Array.isArray(auditSummary.rows) ? auditSummary.rows : [];
   const issueRows = rows.filter((row) => row.status !== "match");
-  const visibleRows = (issueRows.length ? issueRows : rows).slice(0, 30);
+  const visibleRows = issueRows.concat(rows.filter((row) => row.status === "match"));
   elements.auditSummaryPanel.hidden = false;
   elements.auditSummaryPanel.innerHTML = `<div class="audit-review-totals">
     <div><span>Unique</span><strong>${Number(totals.uniqueCount || 0)}</strong></div>
@@ -599,6 +600,12 @@ async function stopAuditSession() {
 async function loadAuditSummary(sessionId) {
   const normalizedSessionId = String(sessionId || auditSession && auditSession.session_id || auditSummary && auditSummary.session && auditSummary.session.session_id || "").trim();
   if (!normalizedSessionId) throw new Error("Audit session is required.");
+  const loadVersion = auditSummaryLoadVersion + 1;
+  auditSummaryLoadVersion = loadVersion;
+  auditSummary = null;
+  auditCollectrLoadRunning = false;
+  saveAuditState();
+  renderAuditState();
   const response = await fetch("/api/audit/summary", {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-App-Pin": pin },
@@ -610,11 +617,12 @@ async function loadAuditSummary(sessionId) {
     throw new Error("Scanner PIN expired. Unlock the app again.");
   }
   if (!response.ok || !data.ok) throw new Error(data.error || "Unable to load audit summary.");
+  if (loadVersion !== auditSummaryLoadVersion) return auditSummary;
   auditSummary = data.summary;
   recomputeAuditSummaryTotals();
   saveAuditState();
   renderAuditState();
-  void loadAuditCollectrSummaryBatches(normalizedSessionId);
+  void loadAuditCollectrSummaryBatches(normalizedSessionId, loadVersion);
   return auditSummary;
 }
 
@@ -656,12 +664,12 @@ function markAuditCollectrRowsFailed(cardIds, message) {
   renderAuditState();
 }
 
-async function loadAuditCollectrSummaryBatches(sessionId) {
+async function loadAuditCollectrSummaryBatches(sessionId, loadVersion = auditSummaryLoadVersion) {
   if (auditCollectrLoadRunning) return;
   auditCollectrLoadRunning = true;
   renderAuditSummary();
   try {
-    while (auditSummary && auditSummary.session && auditSummary.session.session_id === sessionId) {
+    while (loadVersion === auditSummaryLoadVersion && auditSummary && auditSummary.session && auditSummary.session.session_id === sessionId) {
       const batchSize = Number(auditSummary.collectr && auditSummary.collectr.batchSize || 6);
       const cardIds = getPendingAuditCollectrCardIds().slice(0, Math.min(Math.max(batchSize, 1), 6));
       if (!cardIds.length) break;
@@ -676,17 +684,21 @@ async function loadAuditCollectrSummaryBatches(sessionId) {
         throw new Error("Scanner PIN expired. Unlock the app again.");
       }
       if (!response.ok || !data.ok) {
+        if (loadVersion !== auditSummaryLoadVersion) break;
         markAuditCollectrRowsFailed(cardIds, data.error || "Unable to load Collectr quantities.");
         continue;
       }
+      if (loadVersion !== auditSummaryLoadVersion) break;
       mergeAuditCollectrRows(data.rows);
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
   } finally {
-    auditCollectrLoadRunning = false;
-    recomputeAuditSummaryTotals();
-    saveAuditState();
-    renderAuditState();
+    if (loadVersion === auditSummaryLoadVersion) {
+      auditCollectrLoadRunning = false;
+      recomputeAuditSummaryTotals();
+      saveAuditState();
+      renderAuditState();
+    }
   }
 }
 

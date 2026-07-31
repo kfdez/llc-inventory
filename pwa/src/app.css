@@ -651,6 +651,9 @@ summary {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  max-height: min(72vh, 760px);
 }
 .audit-review-totals {
   display: grid;
@@ -675,6 +678,11 @@ summary {
 .audit-review-list {
   display: grid;
   gap: 6px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
 }
 .audit-review-row {
   display: grid;
@@ -759,6 +767,9 @@ summary {
   .result-panel.empty { min-height: 150px; }
   .audit-entry, .audit-review-row {
     grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .audit-review {
+    max-height: 62vh;
   }
   .audit-entry > span, .audit-review-counts {
     grid-column: 1 / -1;
