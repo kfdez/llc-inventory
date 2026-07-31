@@ -280,6 +280,12 @@ function buildCollectrProxyUrl(proxyBaseUrl) {
   return new URL("collectr/api", normalizedBase);
 }
 
+function buildCollectrProxyEndpoint(proxyBaseUrl, path) {
+  const base = String(proxyBaseUrl || "").trim();
+  const normalizedBase = base.endsWith("/") ? base : base + "/";
+  return new URL(String(path || "").replace(/^\/+/, ""), normalizedBase);
+}
+
 async function collectrRequestJson(env, path, query = {}, options = {}) {
   const config = requireCollectrConfig(env);
   const method = String(options.method || "GET").toUpperCase();
@@ -344,6 +350,40 @@ async function collectrRequestJson(env, path, query = {}, options = {}) {
   }
   if (!response.ok) {
     throw new Error(data.error || data.message || "Collectr request failed with HTTP " + response.status + ".");
+  }
+  return data;
+}
+
+async function collectrProxyJobRequest(env, path, options = {}) {
+  const config = requireCollectrConfig(env);
+  if (!config.proxyBaseUrl || !config.proxySecret) {
+    throw new Error("Collectr VPS job proxy is not configured.");
+  }
+  const url = buildCollectrProxyEndpoint(config.proxyBaseUrl, path);
+  Object.entries(options.query || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      url.searchParams.set(key, String(value));
+    }
+  });
+  const method = String(options.method || "GET").toUpperCase();
+  const response = await fetch(url, {
+    method,
+    headers: {
+      "Accept": "application/json",
+      "Content-Type": "application/json",
+      "X-Collectr-Proxy-Secret": config.proxySecret
+    },
+    body: method === "GET" ? undefined : JSON.stringify(options.body || {})
+  });
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text || "{}");
+  } catch (_) {
+    throw new Error("Collectr job proxy returned an invalid JSON response.");
+  }
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || "Collectr job proxy request failed.");
   }
   return data;
 }
@@ -1046,7 +1086,12 @@ function getSheetAuditSummaryStatus(scannedCount, sheetQuantity, item) {
 }
 
 async function getFastAuditSummary(env, sessionId) {
-  const statusData = await appsScriptGet(env, "audit/status", { threadId: "pwa-audit", sessionId });
+  let statusData;
+  try {
+    statusData = await appsScriptGet(env, "audit/status", { threadId: "pwa-audit", sessionId });
+  } catch (error) {
+    statusData = await appsScriptGet(env, "audit/status", { threadId: "pwa-audit" });
+  }
   const statusResult = statusData.result || {};
   const session = statusResult.session || null;
   if (!session || String(session.session_id || "").trim() !== sessionId) return null;
@@ -1171,6 +1216,68 @@ async function getAuditCollectrSummaryBatch(request, env) {
   }
 }
 
+async function startAuditCollectrJob(request, env) {
+  const authorized = isAuthorized(request, env);
+  if (!authorized.ok) return authorized.response;
+  let payload;
+  try {
+    payload = await request.json();
+  } catch (_) {
+    return json({ ok: false, error: "Invalid request body." }, 400);
+  }
+  const sessionId = String(payload.sessionId || "").trim();
+  const rows = Array.isArray(payload.rows) ? payload.rows : [];
+  if (!sessionId) return json({ ok: false, error: "Audit session is required." }, 400);
+  if (!rows.length) return json({ ok: false, error: "At least one review row is required." }, 400);
+  try {
+    const data = await collectrProxyJobRequest(env, "collectr/audit-review/start", {
+      method: "POST",
+      body: { sessionId, rows }
+    });
+    return json({ ok: true, job: data.job });
+  } catch (error) {
+    return json({ ok: false, error: "Audit Collectr job start failed: " + error.message }, 502);
+  }
+}
+
+async function getAuditCollectrJobStatus(request, env) {
+  const authorized = isAuthorized(request, env);
+  if (!authorized.ok) return authorized.response;
+  const requestUrl = new URL(request.url);
+  const jobId = String(requestUrl.searchParams.get("jobId") || "").trim();
+  if (!jobId) return json({ ok: false, error: "Collectr job ID is required." }, 400);
+  try {
+    const data = await collectrProxyJobRequest(env, "collectr/audit-review/status", {
+      query: { jobId }
+    });
+    return json({ ok: true, job: data.job });
+  } catch (error) {
+    return json({ ok: false, error: "Audit Collectr job status failed: " + error.message }, 502);
+  }
+}
+
+async function stopAuditCollectrJob(request, env) {
+  const authorized = isAuthorized(request, env);
+  if (!authorized.ok) return authorized.response;
+  let payload;
+  try {
+    payload = await request.json();
+  } catch (_) {
+    return json({ ok: false, error: "Invalid request body." }, 400);
+  }
+  const jobId = String(payload.jobId || "").trim();
+  if (!jobId) return json({ ok: false, error: "Collectr job ID is required." }, 400);
+  try {
+    const data = await collectrProxyJobRequest(env, "collectr/audit-review/stop", {
+      method: "POST",
+      body: { jobId }
+    });
+    return json({ ok: true, job: data.job });
+  } catch (error) {
+    return json({ ok: false, error: "Audit Collectr job stop failed: " + error.message }, 502);
+  }
+}
+
 async function cacheStatus(request, env, ctx) {
   const authorized = isAuthorized(request, env);
   if (!authorized.ok) return authorized.response;
@@ -1255,6 +1362,18 @@ export default {
     if (url.pathname === "/api/audit/collectr-summary") {
       if (request.method !== "POST") return json({ ok: false, error: "Method not allowed." }, 405);
       return getAuditCollectrSummaryBatch(request, env);
+    }
+    if (url.pathname === "/api/audit/collectr-job/start") {
+      if (request.method !== "POST") return json({ ok: false, error: "Method not allowed." }, 405);
+      return startAuditCollectrJob(request, env);
+    }
+    if (url.pathname === "/api/audit/collectr-job/status") {
+      if (request.method !== "GET") return json({ ok: false, error: "Method not allowed." }, 405);
+      return getAuditCollectrJobStatus(request, env);
+    }
+    if (url.pathname === "/api/audit/collectr-job/stop") {
+      if (request.method !== "POST") return json({ ok: false, error: "Method not allowed." }, 405);
+      return stopAuditCollectrJob(request, env);
     }
     const response = await env.ASSETS.fetch(request);
     const headers = secureAssetHeaders(response.headers);

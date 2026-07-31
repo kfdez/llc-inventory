@@ -30,7 +30,7 @@ async function main() {
   }, "Starting LLC Inventory v2.");
 
   await startDiscordBot({ config, logger, captureService });
-  const collectrProxyServer = startCollectrProxyServer({ config, logger });
+  const collectrProxyServer = startCollectrProxyServer({ config, logger, store });
 
   const interval = setInterval(() => {
     captureService.processNextJob().catch((error) => {

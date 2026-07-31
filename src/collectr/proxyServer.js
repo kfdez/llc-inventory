@@ -1,11 +1,6 @@
 const http = require("http");
-
-const ALLOWED_COLLECTR_PATHS = [
-  /^\/accounts\/[^/]+\/collections$/,
-  /^\/collections\/[^/]+\/products$/,
-  /^\/collections\/[^/]+\/products\/[^/]+$/,
-  /^\/catalog$/
-];
+const { buildCollectrUrl, fetchCollectrJson, isAllowedCollectrPath } = require("./client");
+const { AuditCollectrReviewService } = require("./auditReviewService");
 
 function normalizeSecret(value) {
   return String(value || "").trim();
@@ -60,65 +55,14 @@ function readJsonBody(request, limitBytes = 64 * 1024) {
   });
 }
 
-function isAllowedCollectrPath(path) {
-  return ALLOWED_COLLECTR_PATHS.some((pattern) => pattern.test(path));
-}
-
-function buildCollectrUrl(config, path, query = {}) {
-  const normalizedPath = String(path || "").trim();
-  if (!isAllowedCollectrPath(normalizedPath)) {
-    throw new Error("Collectr path is not allowed.");
-  }
-
-  const url = new URL(normalizedPath, config.apiBaseUrl);
-  Object.entries(query || {}).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== "") {
-      url.searchParams.set(key, String(value));
-    }
-  });
-  return url;
-}
-
-async function fetchCollectrJson(config, path, query = {}, options = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);
-  const method = String(options.method || "GET").toUpperCase();
-  try {
-    const response = await fetch(buildCollectrUrl(config, path, query), {
-      method,
-      signal: controller.signal,
-      headers: {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "Authorization": config.authToken,
-        "Origin": "https://app.getcollectr.com",
-        "Referer": "https://app.getcollectr.com/"
-      },
-      body: method === "GET" ? undefined : JSON.stringify(options.body || {})
-    });
-    const text = await response.text();
-    let data;
-    try {
-      data = JSON.parse(text || "{}");
-    } catch (_) {
-      throw new Error(
-        "Collectr returned non-JSON: HTTP " + response.status +
-        ", content-type " + (response.headers.get("content-type") || "unknown")
-      );
-    }
-    if (!response.ok) {
-      throw new Error(data.error || data.message || "Collectr request failed with HTTP " + response.status + ".");
-    }
-    return data;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function startCollectrProxyServer({ config, logger }) {
+function startCollectrProxyServer({ config, logger, store }) {
   if (!config.collectrProxy.enabled) {
     return null;
   }
+
+  const auditReviewService = store
+    ? new AuditCollectrReviewService({ config: config.collectrProxy, store, logger })
+    : null;
 
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
@@ -126,16 +70,59 @@ function startCollectrProxyServer({ config, logger }) {
       sendJson(response, 200, { ok: true });
       return;
     }
+    if (!safeEqual(request.headers["x-collectr-proxy-secret"], config.collectrProxy.secret)) {
+      sendJson(response, 401, { ok: false, error: "Unauthorized." });
+      return;
+    }
+
+    if (auditReviewService && url.pathname === "/collectr/audit-review/status") {
+      if (request.method !== "GET") {
+        sendJson(response, 405, { ok: false, error: "Method not allowed." });
+        return;
+      }
+      try {
+        sendJson(response, 200, { ok: true, job: auditReviewService.getJob(url.searchParams.get("jobId")) });
+      } catch (error) {
+        sendJson(response, 404, { ok: false, error: error.message });
+      }
+      return;
+    }
+
+    if (auditReviewService && url.pathname === "/collectr/audit-review/start") {
+      if (request.method !== "POST") {
+        sendJson(response, 405, { ok: false, error: "Method not allowed." });
+        return;
+      }
+      try {
+        const body = await readJsonBody(request, 2 * 1024 * 1024);
+        sendJson(response, 200, { ok: true, job: auditReviewService.startJob(body) });
+      } catch (error) {
+        logger.warn({ err: error }, "Collectr audit review start failed.");
+        sendJson(response, 400, { ok: false, error: error.message });
+      }
+      return;
+    }
+
+    if (auditReviewService && url.pathname === "/collectr/audit-review/stop") {
+      if (request.method !== "POST") {
+        sendJson(response, 405, { ok: false, error: "Method not allowed." });
+        return;
+      }
+      try {
+        const body = await readJsonBody(request);
+        sendJson(response, 200, { ok: true, job: auditReviewService.stopJob(body.jobId) });
+      } catch (error) {
+        sendJson(response, 404, { ok: false, error: error.message });
+      }
+      return;
+    }
+
     if (url.pathname !== "/collectr/api") {
       sendJson(response, 404, { ok: false, error: "Not found." });
       return;
     }
     if (request.method !== "POST") {
       sendJson(response, 405, { ok: false, error: "Method not allowed." });
-      return;
-    }
-    if (!safeEqual(request.headers["x-collectr-proxy-secret"], config.collectrProxy.secret)) {
-      sendJson(response, 401, { ok: false, error: "Unauthorized." });
       return;
     }
 
@@ -172,6 +159,11 @@ function startCollectrProxyServer({ config, logger }) {
       port: config.collectrProxy.port
     }, "Collectr proxy server listening.");
   });
+
+  if (auditReviewService) {
+    auditReviewService.start();
+    server.on("close", () => auditReviewService.stop());
+  }
 
   return server;
 }

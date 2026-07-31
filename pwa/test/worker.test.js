@@ -602,3 +602,52 @@ test("collectr quantity update posts target quantity through the VPS proxy", asy
     globalThis.fetch = originalFetch;
   }
 });
+
+test("audit Collectr job start proxies review rows to the VPS", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    const requestUrl = new URL(String(url));
+    assert.equal(requestUrl.host, "proxy.example");
+    assert.equal(requestUrl.pathname, "/llc-inventory-v2-collectr/collectr/audit-review/start");
+    assert.equal(options.method, "POST");
+    assert.equal(options.headers["X-Collectr-Proxy-Secret"], "proxy-secret");
+    const body = JSON.parse(options.body);
+    assert.equal(body.sessionId, "session-1");
+    assert.equal(body.rows[0].cardId, "KYL-S-ABC12345");
+    return Response.json({
+      ok: true,
+      job: {
+        id: "job-1",
+        state: "pending",
+        sessionId: "session-1",
+        total: 1,
+        loaded: 0,
+        rows: []
+      }
+    });
+  };
+
+  try {
+    const env = {
+      APP_PIN: "482913",
+      APPS_SCRIPT_API_BASE_URL: "https://script.example/exec",
+      COLLECTR_ACCOUNT_ID: "account-1",
+      COLLECTR_PROXY_BASE_URL: "https://proxy.example/llc-inventory-v2-collectr/",
+      COLLECTR_PROXY_SECRET: "proxy-secret"
+    };
+    const response = await worker.fetch(new Request("https://scanner.test/api/audit/collectr-job/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-App-Pin": "482913" },
+      body: JSON.stringify({
+        sessionId: "session-1",
+        rows: [{ cardId: "KYL-S-ABC12345", item: { cardId: "KYL-S-ABC12345" } }]
+      })
+    }), env, {});
+    const data = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(data.ok, true);
+    assert.equal(data.job.id, "job-1");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

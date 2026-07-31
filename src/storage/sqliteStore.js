@@ -30,12 +30,12 @@ class SqliteStore {
     this.db.close();
   }
 
-  createJob({ type, state, payload = {}, id = randomUUID() }) {
+  createJob({ type, state, payload = {}, result = {}, id = randomUUID() }) {
     const timestamp = nowIso();
     this.db.prepare(`
       INSERT INTO jobs (id, type, state, payload_json, result_json, created_at, updated_at)
-      VALUES (?, ?, ?, ?, '{}', ?, ?)
-    `).run(id, type, state, JSON.stringify(payload), timestamp, timestamp);
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(id, type, state, JSON.stringify(payload), JSON.stringify(result), timestamp, timestamp);
     return this.getJob(id);
   }
 
