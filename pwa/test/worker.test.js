@@ -93,6 +93,46 @@ test("audit scan forwards card ID in the Apps Script scan payload", async () => 
   }
 });
 
+test("audit status returns the active Apps Script audit session", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const requestUrl = new URL(String(url));
+    assert.equal(requestUrl.searchParams.get("path"), "audit/status");
+    assert.equal(requestUrl.searchParams.get("threadId"), "pwa-audit");
+    return Response.json({
+      ok: true,
+      result: {
+        session: {
+          session_id: "session-1",
+          session_name: "Inventory audit",
+          sheet_tab_name: "Audit Log - Inventory audit",
+          thread_id: "pwa-audit",
+          status: "active"
+        },
+        scans: [{
+          cardId: "AL-S-E51F26CF",
+          recordKey: "record-1",
+          status: "active"
+        }]
+      }
+    });
+  };
+
+  try {
+    const env = { APP_PIN: "482913", APPS_SCRIPT_API_BASE_URL: "https://script.example/exec" };
+    const response = await worker.fetch(new Request("https://scanner.test/api/audit/status", {
+      headers: { "X-App-Pin": "482913" }
+    }), env, {});
+    const data = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(data.ok, true);
+    assert.equal(data.session.session_id, "session-1");
+    assert.equal(data.scans[0].recordKey, "record-1");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("collectr resolve requires Collectr configuration after inventory lookup", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {

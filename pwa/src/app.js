@@ -46,7 +46,53 @@ const elements = {
   scanCanvas: document.querySelector("#scanCanvas")
 };
 
-let pin = sessionStorage.getItem("scannerPin") || "";
+function storageGet(storage, key, fallback = "") {
+  try {
+    const value = storage.getItem(key);
+    return value == null ? fallback : value;
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function storageSet(storage, key, value) {
+  try {
+    storage.setItem(key, value);
+  } catch (_) {}
+}
+
+function storageRemove(storage, key) {
+  try {
+    storage.removeItem(key);
+  } catch (_) {}
+}
+
+function readJsonStorage(key, fallback) {
+  const durableValue = storageGet(localStorage, key, "");
+  const raw = durableValue || storageGet(sessionStorage, key, "");
+  if (!raw) return fallback;
+  if (!durableValue) storageSet(localStorage, key, raw);
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function readNumberStorage(key, fallback = 0) {
+  const durableValue = storageGet(localStorage, key, "");
+  const raw = durableValue || storageGet(sessionStorage, key, "");
+  if (!durableValue && raw) storageSet(localStorage, key, raw);
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+const storedMode = storageGet(localStorage, "scannerMode", storageGet(sessionStorage, "scannerMode", ""));
+if (storedMode && !storageGet(localStorage, "scannerMode", "")) {
+  storageSet(localStorage, "scannerMode", storedMode);
+}
+
+let pin = storageGet(sessionStorage, "scannerPin", "");
 let stream = null;
 let scanning = false;
 let scanPaused = false;
@@ -54,12 +100,14 @@ let lookupInProgress = false;
 let lookupQueue = [];
 let lastCode = "";
 let missedScanFrames = 0;
-let mode = ["lookup", "cart", "audit"].includes(sessionStorage.getItem("scannerMode")) ? sessionStorage.getItem("scannerMode") : "lookup";
-let cart = JSON.parse(sessionStorage.getItem("scannerCart") || "[]");
-let auditSession = JSON.parse(sessionStorage.getItem("auditSession") || "null");
-let auditScanCount = Number(sessionStorage.getItem("auditScanCount") || 0);
-let auditLog = JSON.parse(sessionStorage.getItem("auditLog") || "[]");
-let auditSummary = JSON.parse(sessionStorage.getItem("auditSummary") || "null");
+let mode = ["lookup", "cart", "audit"].includes(storedMode) ? storedMode : "lookup";
+let cart = readJsonStorage("scannerCart", []);
+let auditSession = readJsonStorage("auditSession", null);
+let auditScanCount = readNumberStorage("auditScanCount", 0);
+let auditLog = readJsonStorage("auditLog", []);
+let auditSummary = readJsonStorage("auditSummary", null);
+if (!Array.isArray(cart)) cart = [];
+if (!Array.isArray(auditLog)) auditLog = [];
 auditLog = auditLog.map((entry) => {
   if (entry.status === "syncing") return { ...entry, status: "pending", message: "Queued" };
   if (entry.status === "undoing") return { ...entry, status: "synced", message: "Synced" };
@@ -153,10 +201,14 @@ async function unlock(candidatePin) {
   const data = await response.json();
   if (!response.ok || !data.ok) throw new Error(data.error || "Unable to unlock scanner.");
   pin = candidatePin;
-  sessionStorage.setItem("scannerPin", pin);
+  storageSet(sessionStorage, "scannerPin", pin);
   elements.pinScreen.hidden = true;
   elements.scannerScreen.hidden = false;
   elements.pinMessage.textContent = "";
+  await resumeAuditSessionFromServer();
+  if (auditLog.some((entry) => entry.status === "pending" || entry.status === "syncing")) {
+    void drainAuditSaveQueue();
+  }
   void refreshCacheStatus({ warm: true });
   window.setTimeout(() => { void refreshCacheStatus(); }, 3000);
   window.setTimeout(() => { void refreshCacheStatus(); }, 8000);
@@ -166,7 +218,7 @@ function lock() {
   stopCamera();
   lookupQueue = [];
   pin = "";
-  sessionStorage.removeItem("scannerPin");
+  storageRemove(sessionStorage, "scannerPin");
   elements.pinInput.value = "";
   elements.pinScreen.hidden = false;
   elements.scannerScreen.hidden = true;
@@ -258,7 +310,7 @@ function signalQrDetection() {
 }
 
 function saveCart() {
-  sessionStorage.setItem("scannerCart", JSON.stringify(cart));
+  storageSet(localStorage, "scannerCart", JSON.stringify(cart));
 }
 
 function cartQuantity() {
@@ -287,10 +339,10 @@ function renderCart() {
 }
 
 function saveAuditState() {
-  sessionStorage.setItem("auditSession", JSON.stringify(auditSession));
-  sessionStorage.setItem("auditScanCount", String(auditScanCount));
-  sessionStorage.setItem("auditLog", JSON.stringify(auditLog));
-  sessionStorage.setItem("auditSummary", JSON.stringify(auditSummary));
+  storageSet(localStorage, "auditSession", JSON.stringify(auditSession));
+  storageSet(localStorage, "auditScanCount", String(auditScanCount));
+  storageSet(localStorage, "auditLog", JSON.stringify(auditLog));
+  storageSet(localStorage, "auditSummary", JSON.stringify(auditSummary));
 }
 
 function auditStatusLabel(status) {
@@ -372,6 +424,76 @@ function renderAuditState() {
     }).join("")
     : "Start an audit session and scan labels.";
   renderAuditSummary();
+}
+
+function buildAuditEntryFromServerScan(session, scan) {
+  const cardId = String(scan.cardId || "").trim();
+  return {
+    recordKey: String(scan.recordKey || [session.session_id, cardId, scan.scannedAt || ""].join(":")),
+    sessionId: session.session_id,
+    cardId,
+    name: cardId,
+    setName: "",
+    attempts: 0,
+    status: "synced",
+    kind: "",
+    message: "Synced"
+  };
+}
+
+function mergeAuditScansFromServer(session, scans) {
+  const existingByKey = new Map(auditLog.map((entry) => [entry.recordKey, entry]));
+  const serverEntries = (Array.isArray(scans) ? scans : [])
+    .filter((scan) => scan && scan.cardId)
+    .map((scan) => {
+      const incoming = buildAuditEntryFromServerScan(session, scan);
+      const existing = existingByKey.get(incoming.recordKey);
+      if (!existing) return incoming;
+      if (existing.status === "pending" || existing.status === "syncing") return existing;
+      return {
+        ...incoming,
+        ...existing,
+        status: "synced",
+        message: existing.message || "Synced"
+      };
+    });
+  const serverKeys = new Set(serverEntries.map((entry) => entry.recordKey));
+  const localCarryover = auditLog.filter((entry) => {
+    if (entry.sessionId !== session.session_id) return false;
+    if (serverKeys.has(entry.recordKey)) return false;
+    return entry.status === "pending" || entry.status === "syncing" || entry.status === "error" || entry.status === "undo_error";
+  });
+
+  auditLog = localCarryover.concat(serverEntries).slice(0, 250);
+  auditScanCount = auditLog.filter((entry) => entry.status !== "undoing" && entry.status !== "undo_error").length;
+}
+
+async function resumeAuditSessionFromServer() {
+  if (!pin) return;
+  try {
+    const response = await authenticatedFetch("/api/audit/status");
+    const data = await response.json();
+    if (response.status === 401) {
+      lock();
+      return;
+    }
+    if (!response.ok || !data.ok) throw new Error(data.error || "Unable to load audit status.");
+    if (!data.session) return;
+
+    const hadDifferentSession = !auditSession || auditSession.session_id !== data.session.session_id;
+    auditSession = data.session;
+    auditSummary = hadDifferentSession ? null : auditSummary;
+    mergeAuditScansFromServer(auditSession, data.scans);
+    saveAuditState();
+    setMode("audit");
+    renderAuditState();
+    if (hadDifferentSession) {
+      setStatus("Audit restored", "success");
+      elements.cameraMessage.textContent = "Active audit restored from the sheet.";
+    }
+  } catch (error) {
+    setErrorStatus("Audit restore issue", error.message);
+  }
 }
 
 function addAuditLogEntry(entry) {
@@ -664,7 +786,7 @@ function addToCart(cardId, item) {
 
 function setMode(nextMode) {
   mode = ["lookup", "cart", "audit"].includes(nextMode) ? nextMode : "lookup";
-  sessionStorage.setItem("scannerMode", mode);
+  storageSet(localStorage, "scannerMode", mode);
   const cartMode = mode === "cart";
   const auditMode = mode === "audit";
   scanPaused = false;

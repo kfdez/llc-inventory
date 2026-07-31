@@ -108,6 +108,15 @@ function doGet(e) {
       });
     }
 
+    if (path === "audit/status") {
+      return jsonResponse_({
+        ok: true,
+        result: getAuditStatus_({
+          threadId: e.parameter.threadId
+        })
+      });
+    }
+
     return jsonResponse_({ ok: false, error: "Unknown GET path: " + path });
   } catch (error) {
     return jsonResponse_({ ok: false, error: error.message });
@@ -965,6 +974,40 @@ function getAuditSessionById_(sessionId) {
   }
 
   return session;
+}
+
+function getActiveAuditSession_(threadId) {
+  const normalizedThreadId = String(threadId || "").trim() || "pwa-audit";
+  const sessions = getSheetRows_(AUDIT_SESSIONS_SHEET);
+
+  for (let index = sessions.length - 1; index >= 0; index -= 1) {
+    const session = sessions[index];
+    if (String(session.thread_id || "").trim() === normalizedThreadId &&
+        String(session.status || "").trim().toLowerCase() === "active") {
+      return session;
+    }
+  }
+
+  return null;
+}
+
+function getAuditStatus_(payload) {
+  const session = getActiveAuditSession_(payload.threadId);
+  if (!session) {
+    return {
+      session: null,
+      scans: []
+    };
+  }
+
+  const scans = getAuditScanRowsForSession_(session).filter(function (scan) {
+    return scan.cardId && scan.status !== "undone";
+  });
+
+  return {
+    session: serializeAuditSession_(session),
+    scans: scans.slice(Math.max(0, scans.length - 250))
+  };
 }
 
 function stopAuditSession_(payload) {

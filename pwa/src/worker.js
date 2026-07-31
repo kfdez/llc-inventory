@@ -233,6 +233,28 @@ async function appsScriptPost(env, path, payload) {
   return data;
 }
 
+async function appsScriptGet(env, path, query = {}) {
+  const appsScriptUrl = new URL(env.APPS_SCRIPT_API_BASE_URL);
+  appsScriptUrl.searchParams.set("path", path);
+  Object.entries(query).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      appsScriptUrl.searchParams.set(key, String(value));
+    }
+  });
+  const response = await fetch(appsScriptUrl, { redirect: "follow" });
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (_) {
+    throw new Error("The spreadsheet service returned an invalid response.");
+  }
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || "Spreadsheet request failed.");
+  }
+  return data;
+}
+
 function requireCollectrConfig(env) {
   const accountId = String(env.COLLECTR_ACCOUNT_ID || "").trim();
   const proxyBaseUrl = String(env.COLLECTR_PROXY_BASE_URL || "").trim();
@@ -884,6 +906,22 @@ async function recordAuditScan(request, env) {
   }
 }
 
+async function getAuditStatus(request, env) {
+  const authorized = isAuthorized(request, env);
+  if (!authorized.ok) return authorized.response;
+  try {
+    const data = await appsScriptGet(env, "audit/status", { threadId: "pwa-audit" });
+    const result = data.result || {};
+    return json({
+      ok: true,
+      session: result.session || null,
+      scans: Array.isArray(result.scans) ? result.scans : []
+    });
+  } catch (error) {
+    return json({ ok: false, error: "Audit status failed: " + error.message }, 502);
+  }
+}
+
 async function undoAuditScan(request, env) {
   const authorized = isAuthorized(request, env);
   if (!authorized.ok) return authorized.response;
@@ -1062,6 +1100,10 @@ export default {
     if (url.pathname === "/api/audit/scan") {
       if (request.method !== "POST") return json({ ok: false, error: "Method not allowed." }, 405);
       return recordAuditScan(request, env);
+    }
+    if (url.pathname === "/api/audit/status") {
+      if (request.method !== "GET") return json({ ok: false, error: "Method not allowed." }, 405);
+      return getAuditStatus(request, env);
     }
     if (url.pathname === "/api/audit/undo") {
       if (request.method !== "POST") return json({ ok: false, error: "Method not allowed." }, 405);
