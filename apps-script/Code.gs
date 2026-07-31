@@ -112,7 +112,8 @@ function doGet(e) {
       return jsonResponse_({
         ok: true,
         result: getAuditStatus_({
-          threadId: e.parameter.threadId
+          threadId: e.parameter.threadId,
+          sessionId: e.parameter.sessionId
         })
       });
     }
@@ -992,7 +993,8 @@ function getActiveAuditSession_(threadId) {
 }
 
 function getAuditStatus_(payload) {
-  const session = getActiveAuditSession_(payload.threadId);
+  const sessionId = String(payload.sessionId || "").trim();
+  const session = sessionId ? getAuditSessionById_(sessionId) : getActiveAuditSession_(payload.threadId);
   if (!session) {
     return {
       session: null,

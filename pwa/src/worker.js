@@ -911,7 +911,9 @@ async function getAuditStatus(request, env) {
   const authorized = isAuthorized(request, env);
   if (!authorized.ok) return authorized.response;
   try {
-    const data = await appsScriptGet(env, "audit/status", { threadId: "pwa-audit" });
+    const requestUrl = new URL(request.url);
+    const sessionId = String(requestUrl.searchParams.get("sessionId") || "").trim();
+    const data = await appsScriptGet(env, "audit/status", { threadId: "pwa-audit", sessionId });
     const result = data.result || {};
     return json({
       ok: true,
@@ -1037,6 +1039,75 @@ function prepareAuditSummary(summary) {
   };
 }
 
+function getSheetAuditSummaryStatus(scannedCount, sheetQuantity, item) {
+  if (!item) return "not-in-sheet";
+  if (Number(scannedCount || 0) === Number(sheetQuantity || 0)) return "match";
+  return Number(scannedCount || 0) > Number(sheetQuantity || 0) ? "over" : "short";
+}
+
+async function getFastAuditSummary(env, sessionId) {
+  const statusData = await appsScriptGet(env, "audit/status", { threadId: "pwa-audit", sessionId });
+  const statusResult = statusData.result || {};
+  const session = statusResult.session || null;
+  if (!session || String(session.session_id || "").trim() !== sessionId) return null;
+
+  await ensureInventorySnapshot(env, { allowStale: true });
+  const scans = Array.isArray(statusResult.scans) ? statusResult.scans : [];
+  const activeScans = scans.filter((scan) => scan && scan.cardId && String(scan.status || "").toLowerCase() !== "undone");
+  const grouped = new Map();
+
+  for (const scan of activeScans) {
+    const key = normalizeCardId(scan.cardId);
+    if (!key) continue;
+    const group = grouped.get(key) || {
+      cardId: String(scan.cardId || "").trim(),
+      scannedCount: 0,
+      recordKeys: []
+    };
+    group.scannedCount += 1;
+    if (scan.recordKey) group.recordKeys.push(scan.recordKey);
+    grouped.set(key, group);
+  }
+
+  const rows = [...grouped.keys()].sort().map((key) => {
+    const group = grouped.get(key);
+    const item = getInventorySnapshotLookup(group.cardId, { allowStale: true })?.item || null;
+    const sheetQuantity = item ? Number(item.quantity || 0) : 0;
+    return {
+      cardId: group.cardId,
+      scannedCount: group.scannedCount,
+      sheetQuantity,
+      sheetDifference: group.scannedCount - sheetQuantity,
+      status: getSheetAuditSummaryStatus(group.scannedCount, sheetQuantity, item),
+      item,
+      recordKeys: group.recordKeys
+    };
+  });
+
+  const totals = rows.reduce((output, row) => {
+    output.scannedCount += Number(row.scannedCount || 0);
+    output.uniqueCount += 1;
+    output.issueCount += row.status === "match" ? 0 : 1;
+    output.sheetQuantity += Number(row.sheetQuantity || 0);
+    return output;
+  }, {
+    scannedCount: 0,
+    uniqueCount: 0,
+    issueCount: 0,
+    sheetQuantity: 0
+  });
+
+  return {
+    session,
+    generatedAt: new Date().toISOString(),
+    scanCount: scans.length,
+    activeScanCount: activeScans.length,
+    undoneScanCount: scans.length - activeScans.length,
+    totals,
+    rows
+  };
+}
+
 async function getAuditSummary(request, env) {
   const authorized = isAuthorized(request, env);
   if (!authorized.ok) return authorized.response;
@@ -1049,6 +1120,8 @@ async function getAuditSummary(request, env) {
   const sessionId = String(payload.sessionId || "").trim();
   if (!sessionId) return json({ ok: false, error: "Audit session is required." }, 400);
   try {
+    const fastSummary = await getFastAuditSummary(env, sessionId);
+    if (fastSummary) return json({ ok: true, summary: prepareAuditSummary(fastSummary) });
     const data = await appsScriptPost(env, "audit/summary", { sessionId });
     return json({ ok: true, summary: prepareAuditSummary(data.summary) });
   } catch (error) {
@@ -1074,14 +1147,18 @@ async function getAuditCollectrSummaryBatch(request, env) {
   if (!uniqueCardIds.length) return json({ ok: false, error: "At least one Card ID is required." }, 400);
 
   try {
-    const data = await appsScriptPost(env, "audit/summary", { sessionId });
-    const rows = Array.isArray(data.summary && data.summary.rows) ? data.summary.rows : [];
+    let summary = await getFastAuditSummary(env, sessionId);
+    if (!summary) {
+      const data = await appsScriptPost(env, "audit/summary", { sessionId });
+      summary = data.summary;
+    }
+    const rows = Array.isArray(summary && summary.rows) ? summary.rows : [];
     const requested = new Set(uniqueCardIds);
-    const summary = {
-      ...data.summary,
+    const batchSummary = {
+      ...summary,
       rows: rows.filter((row) => requested.has(normalizeCardId(row.cardId)))
     };
-    const enriched = await enrichAuditSummaryWithCollectr(env, summary);
+    const enriched = await enrichAuditSummaryWithCollectr(env, batchSummary);
     return json({
       ok: true,
       rows: enriched.rows,

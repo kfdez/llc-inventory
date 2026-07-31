@@ -135,37 +135,94 @@ test("audit status returns the active Apps Script audit session", async () => {
 
 test("audit summary returns sheet review before Collectr enrichment", async () => {
   const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const requestUrl = new URL(String(url));
+    assert.equal(requestUrl.host, "script.example");
+
+    if (requestUrl.searchParams.get("path") === "audit/status") {
+      assert.equal(requestUrl.searchParams.get("sessionId"), "session-1");
+      return Response.json({
+        ok: true,
+        result: {
+          session: { session_id: "session-1" },
+          scans: [{
+            cardId: "KYL-S-ABC12345",
+            status: "active",
+            recordKey: "record-1"
+          }]
+        }
+      });
+    }
+
+    if (requestUrl.searchParams.get("path") === "inventory/lookup-snapshot") {
+      return Response.json({
+        ok: true,
+        snapshot: {
+          itemsById: {
+            "KYL-S-ABC12345": {
+              cardId: "KYL-S-ABC12345",
+              portfolioName: "KYL",
+              setName: "Black Bolt",
+              name: "Crustle",
+              cardNumber: "130/086",
+              quantity: 1
+            }
+          }
+        }
+      });
+    }
+
+    throw new Error("Unexpected fetch: " + requestUrl.toString());
+  };
+
+  try {
+    const env = { APP_PIN: "482913", APPS_SCRIPT_API_BASE_URL: "https://script.example/exec" };
+    const response = await worker.fetch(new Request("https://scanner.test/api/audit/summary", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-App-Pin": "482913" },
+      body: JSON.stringify({ sessionId: "session-1" })
+    }), env, {});
+    const data = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(data.ok, true);
+    assert.equal(data.summary.rows[0].cardId, "KYL-S-ABC12345");
+    assert.equal(data.summary.rows[0].collectrPending, true);
+    assert.equal(data.summary.rows[0].collectrLoaded, false);
+    assert.equal(data.summary.collectr.pendingCount, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("audit summary falls back to Apps Script summary when status has no session", async () => {
+  const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options = {}) => {
     const requestUrl = new URL(String(url));
-    const body = JSON.parse(options.body);
     assert.equal(requestUrl.host, "script.example");
-    assert.equal(body.path, "audit/summary");
-    assert.equal(body.payload.sessionId, "session-1");
-    return Response.json({
-      ok: true,
-      summary: {
-        session: { session_id: "session-1" },
-        totals: {
-          scannedCount: 1,
-          uniqueCount: 1,
-          issueCount: 0,
-          sheetQuantity: 1
-        },
-        rows: [{
-          cardId: "KYL-S-ABC12345",
-          scannedCount: 1,
-          sheetQuantity: 1,
-          status: "match",
-          item: {
+
+    if (requestUrl.searchParams.get("path") === "audit/status") {
+      return Response.json({ ok: true, result: { session: null, scans: [] } });
+    }
+
+    const body = JSON.parse(options.body);
+    if (body.path === "audit/summary") {
+      assert.equal(body.payload.sessionId, "session-1");
+      return Response.json({
+        ok: true,
+        summary: {
+          session: { session_id: "session-1" },
+          rows: [{
             cardId: "KYL-S-ABC12345",
-            portfolioName: "KYL",
-            setName: "Black Bolt",
-            name: "Crustle",
-            cardNumber: "130/086"
-          }
-        }]
-      }
-    });
+            scannedCount: 1,
+            sheetQuantity: 1,
+            status: "match",
+            item: { cardId: "KYL-S-ABC12345" }
+          }]
+        }
+      });
+    }
+
+    throw new Error("Unexpected fetch: " + requestUrl.toString());
   };
 
   try {
@@ -179,8 +236,6 @@ test("audit summary returns sheet review before Collectr enrichment", async () =
     assert.equal(response.status, 200);
     assert.equal(data.ok, true);
     assert.equal(data.summary.rows[0].collectrPending, true);
-    assert.equal(data.summary.rows[0].collectrLoaded, false);
-    assert.equal(data.summary.collectr.pendingCount, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }
