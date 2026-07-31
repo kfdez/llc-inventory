@@ -106,6 +106,7 @@ let auditSession = readJsonStorage("auditSession", null);
 let auditScanCount = readNumberStorage("auditScanCount", 0);
 let auditLog = readJsonStorage("auditLog", []);
 let auditSummary = readJsonStorage("auditSummary", null);
+let lastAuditReviewSessionId = storageGet(localStorage, "lastAuditReviewSessionId", "");
 if (!Array.isArray(cart)) cart = [];
 if (!Array.isArray(auditLog)) auditLog = [];
 let auditCollectrLoadRunning = false;
@@ -347,6 +348,7 @@ function saveAuditState() {
   storageSet(localStorage, "auditScanCount", String(auditScanCount));
   storageSet(localStorage, "auditLog", JSON.stringify(auditLog));
   storageSet(localStorage, "auditSummary", JSON.stringify(auditSummary));
+  storageSet(localStorage, "lastAuditReviewSessionId", lastAuditReviewSessionId);
 }
 
 function auditStatusLabel(status) {
@@ -432,7 +434,7 @@ function renderAuditState() {
   elements.auditScanCount.textContent = auditScanCount;
   elements.auditStatusText.textContent = auditSession ? "Active" : "Inactive";
   elements.stopAuditButton.disabled = !auditSession;
-  elements.auditSummaryButton.disabled = !auditSession && !(auditSummary && auditSummary.session);
+  elements.auditSummaryButton.disabled = !auditSession && !(auditSummary && auditSummary.session) && !lastAuditReviewSessionId;
   elements.captureAuditQrButton.disabled = !auditSession || !pendingAuditCardId;
   elements.auditSessionText.textContent = auditSession
     ? "Active: " + auditSession.session_name + " -> " + auditSession.sheet_tab_name
@@ -578,6 +580,7 @@ async function startAuditSession(sessionName) {
   auditScanCount = 0;
   auditLog = [];
   auditSummary = null;
+  lastAuditReviewSessionId = auditSession.session_id;
   saveAuditState();
   renderAuditState();
 }
@@ -600,16 +603,19 @@ async function stopAuditSession() {
 }
 
 async function loadAuditSummary(sessionId) {
-  const normalizedSessionId = String(sessionId || auditSession && auditSession.session_id || auditSummary && auditSummary.session && auditSummary.session.session_id || "").trim();
+  const normalizedSessionId = String(sessionId || auditSession && auditSession.session_id || auditSummary && auditSummary.session && auditSummary.session.session_id || lastAuditReviewSessionId || "").trim();
   if (!normalizedSessionId) throw new Error("Audit session is required.");
   cancelAuditCollectrLoading({ render: false });
   const loadVersion = auditSummaryLoadVersion + 1;
   auditSummaryLoadVersion = loadVersion;
+  lastAuditReviewSessionId = normalizedSessionId;
   auditSummary = null;
   auditCollectrLoadRunning = false;
   auditCollectrLoadStopped = false;
   saveAuditState();
   renderAuditState();
+  elements.auditSummaryPanel.hidden = false;
+  elements.auditSummaryPanel.innerHTML = `<div class="audit-review-empty">Loading audit review...</div>`;
   const response = await fetch("/api/audit/summary", {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-App-Pin": pin },
