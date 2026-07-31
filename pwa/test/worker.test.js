@@ -133,6 +133,59 @@ test("audit status returns the active Apps Script audit session", async () => {
   }
 });
 
+test("audit summary returns sheet review before Collectr enrichment", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    const requestUrl = new URL(String(url));
+    const body = JSON.parse(options.body);
+    assert.equal(requestUrl.host, "script.example");
+    assert.equal(body.path, "audit/summary");
+    assert.equal(body.payload.sessionId, "session-1");
+    return Response.json({
+      ok: true,
+      summary: {
+        session: { session_id: "session-1" },
+        totals: {
+          scannedCount: 1,
+          uniqueCount: 1,
+          issueCount: 0,
+          sheetQuantity: 1
+        },
+        rows: [{
+          cardId: "KYL-S-ABC12345",
+          scannedCount: 1,
+          sheetQuantity: 1,
+          status: "match",
+          item: {
+            cardId: "KYL-S-ABC12345",
+            portfolioName: "KYL",
+            setName: "Black Bolt",
+            name: "Crustle",
+            cardNumber: "130/086"
+          }
+        }]
+      }
+    });
+  };
+
+  try {
+    const env = { APP_PIN: "482913", APPS_SCRIPT_API_BASE_URL: "https://script.example/exec" };
+    const response = await worker.fetch(new Request("https://scanner.test/api/audit/summary", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-App-Pin": "482913" },
+      body: JSON.stringify({ sessionId: "session-1" })
+    }), env, {});
+    const data = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(data.ok, true);
+    assert.equal(data.summary.rows[0].collectrPending, true);
+    assert.equal(data.summary.rows[0].collectrLoaded, false);
+    assert.equal(data.summary.collectr.pendingCount, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("collectr resolve requires Collectr configuration after inventory lookup", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {

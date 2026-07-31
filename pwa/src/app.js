@@ -108,6 +108,7 @@ let auditLog = readJsonStorage("auditLog", []);
 let auditSummary = readJsonStorage("auditSummary", null);
 if (!Array.isArray(cart)) cart = [];
 if (!Array.isArray(auditLog)) auditLog = [];
+let auditCollectrLoadRunning = false;
 auditLog = auditLog.map((entry) => {
   if (entry.status === "syncing") return { ...entry, status: "pending", message: "Queued" };
   if (entry.status === "undoing") return { ...entry, status: "synced", message: "Synced" };
@@ -355,6 +356,32 @@ function auditStatusLabel(status) {
   }[status] || "Issue";
 }
 
+function recomputeAuditSummaryTotals() {
+  if (!auditSummary || !Array.isArray(auditSummary.rows)) return;
+  const rows = auditSummary.rows;
+  auditSummary.totals = rows.reduce((output, row) => {
+    output.scannedCount += Number(row.scannedCount || 0);
+    output.uniqueCount += 1;
+    output.issueCount += row.status === "match" ? 0 : 1;
+    output.sheetQuantity += Number(row.sheetQuantity || 0);
+    output.collectrQuantity += row.collectrLoaded && !row.collectrError ? Number(row.collectrQuantity || 0) : 0;
+    return output;
+  }, {
+    scannedCount: 0,
+    uniqueCount: 0,
+    issueCount: 0,
+    sheetQuantity: 0,
+    collectrQuantity: 0
+  });
+  const collectrRows = rows.filter((row) => row.item);
+  const pendingRows = collectrRows.filter((row) => !row.collectrLoaded && !row.collectrError);
+  auditSummary.collectr = {
+    ...(auditSummary.collectr || {}),
+    loadedCount: collectrRows.length - pendingRows.length,
+    pendingCount: pendingRows.length
+  };
+}
+
 function renderAuditSummary() {
   if (!auditSummary) {
     elements.auditSummaryPanel.hidden = true;
@@ -362,6 +389,7 @@ function renderAuditSummary() {
     return;
   }
   const totals = auditSummary.totals || {};
+  const collectr = auditSummary.collectr || {};
   const rows = Array.isArray(auditSummary.rows) ? auditSummary.rows : [];
   const issueRows = rows.filter((row) => row.status !== "match");
   const visibleRows = (issueRows.length ? issueRows : rows).slice(0, 30);
@@ -372,13 +400,20 @@ function renderAuditSummary() {
     <div><span>Sheet qty</span><strong>${Number(totals.sheetQuantity || 0)}</strong></div>
     <div><span>Collectr qty</span><strong>${Number(totals.collectrQuantity || 0)}</strong></div>
   </div>
+  ${collectr.pendingCount || auditCollectrLoadRunning ? `<div class="audit-review-empty">Collectr check ${Number(collectr.loadedCount || 0)}/${Number((collectr.loadedCount || 0) + (collectr.pendingCount || 0))} loaded.</div>` : ""}
   <div class="audit-review-list">
     ${visibleRows.length ? visibleRows.map((row) => {
       const item = row.item || {};
       const title = item.name || row.cardId || "Unknown card";
       const meta = [item.portfolioName || row.collectrPortfolioName, item.setName, item.cardNumber].filter(Boolean).join(" | ");
-      const collectrText = row.collectrError ? "Collectr: " + row.collectrError : "Collectr " + (row.collectrQuantity ?? "-");
-      const canAdjustCollectr = row.item && !row.collectrError && row.collectrQuantity !== null &&
+      const collectrText = !row.item
+        ? "Collectr skipped"
+        : row.collectrError
+          ? "Collectr: " + row.collectrError
+          : row.collectrLoaded
+            ? "Collectr " + (row.collectrQuantity ?? "-")
+            : "Collectr pending";
+      const canAdjustCollectr = row.item && row.collectrLoaded && !row.collectrError && row.collectrQuantity !== null &&
         Number(row.collectrQuantity || 0) !== Number(row.scannedCount || 0);
       return `<div class="audit-review-row ${row.status === "match" ? "" : "issue"}">
         <div><strong>${escapeHtml(title)}</strong><span>${escapeHtml(meta || row.cardId)}</span></div>
@@ -576,9 +611,83 @@ async function loadAuditSummary(sessionId) {
   }
   if (!response.ok || !data.ok) throw new Error(data.error || "Unable to load audit summary.");
   auditSummary = data.summary;
+  recomputeAuditSummaryTotals();
   saveAuditState();
   renderAuditState();
+  void loadAuditCollectrSummaryBatches(normalizedSessionId);
   return auditSummary;
+}
+
+function getPendingAuditCollectrCardIds() {
+  if (!auditSummary || !Array.isArray(auditSummary.rows)) return [];
+  return auditSummary.rows
+    .filter((row) => row.item && !row.collectrLoaded && !row.collectrError)
+    .map((row) => row.cardId)
+    .filter(Boolean);
+}
+
+function mergeAuditCollectrRows(rows) {
+  if (!auditSummary || !Array.isArray(auditSummary.rows)) return;
+  const incomingById = new Map((Array.isArray(rows) ? rows : []).map((row) => [String(row.cardId || "").toUpperCase(), row]));
+  auditSummary.rows = auditSummary.rows.map((row) => {
+    const incoming = incomingById.get(String(row.cardId || "").toUpperCase());
+    return incoming ? { ...row, ...incoming, collectrLoaded: true, collectrPending: false } : row;
+  });
+  recomputeAuditSummaryTotals();
+  saveAuditState();
+  renderAuditState();
+}
+
+function markAuditCollectrRowsFailed(cardIds, message) {
+  if (!auditSummary || !Array.isArray(auditSummary.rows)) return;
+  const failed = new Set(cardIds.map((cardId) => String(cardId || "").toUpperCase()));
+  auditSummary.rows = auditSummary.rows.map((row) => {
+    if (!failed.has(String(row.cardId || "").toUpperCase())) return row;
+    return {
+      ...row,
+      collectrLoaded: false,
+      collectrPending: false,
+      collectrError: message,
+      status: row.status === "match" ? "collectr-error" : row.status
+    };
+  });
+  recomputeAuditSummaryTotals();
+  saveAuditState();
+  renderAuditState();
+}
+
+async function loadAuditCollectrSummaryBatches(sessionId) {
+  if (auditCollectrLoadRunning) return;
+  auditCollectrLoadRunning = true;
+  renderAuditSummary();
+  try {
+    while (auditSummary && auditSummary.session && auditSummary.session.session_id === sessionId) {
+      const batchSize = Number(auditSummary.collectr && auditSummary.collectr.batchSize || 6);
+      const cardIds = getPendingAuditCollectrCardIds().slice(0, Math.min(Math.max(batchSize, 1), 6));
+      if (!cardIds.length) break;
+      const response = await fetch("/api/audit/collectr-summary", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-App-Pin": pin },
+        body: JSON.stringify({ sessionId, cardIds })
+      });
+      const data = await response.json();
+      if (response.status === 401) {
+        lock();
+        throw new Error("Scanner PIN expired. Unlock the app again.");
+      }
+      if (!response.ok || !data.ok) {
+        markAuditCollectrRowsFailed(cardIds, data.error || "Unable to load Collectr quantities.");
+        continue;
+      }
+      mergeAuditCollectrRows(data.rows);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+  } finally {
+    auditCollectrLoadRunning = false;
+    recomputeAuditSummaryTotals();
+    saveAuditState();
+    renderAuditState();
+  }
 }
 
 async function adjustCollectrQuantityFromAudit(cardId, targetQuantity) {

@@ -8,6 +8,7 @@ const INVENTORY_SNAPSHOT_TTL_MS = 15 * 60 * 1000;
 const INVENTORY_SNAPSHOT_STALE_TTL_MS = 2 * 60 * 60 * 1000;
 const COLLECTR_API_BASE_URL = "https://api-v2.getcollectr.com";
 const COLLECTR_PORTFOLIO_CACHE_TTL_MS = 10 * 60 * 1000;
+const AUDIT_COLLECTR_BATCH_SIZE = 6;
 const lookupCache = new Map();
 let inventorySnapshot = null;
 let inventorySnapshotPromise = null;
@@ -1012,6 +1013,30 @@ async function enrichAuditSummaryWithCollectr(env, summary) {
   };
 }
 
+function prepareAuditSummary(summary) {
+  const rows = Array.isArray(summary.rows) ? summary.rows : [];
+  const preparedRows = rows.map((row) => ({
+    ...row,
+    collectrQuantity: null,
+    collectrDifference: null,
+    collectrPortfolioName: "",
+    collectrProductId: "",
+    collectrWarnings: [],
+    collectrLoaded: !row.item,
+    collectrPending: Boolean(row.item)
+  }));
+
+  return {
+    ...summary,
+    rows: preparedRows,
+    collectr: {
+      loadedCount: preparedRows.filter((row) => row.collectrLoaded).length,
+      pendingCount: preparedRows.filter((row) => row.collectrPending).length,
+      batchSize: AUDIT_COLLECTR_BATCH_SIZE
+    }
+  };
+}
+
 async function getAuditSummary(request, env) {
   const authorized = isAuthorized(request, env);
   if (!authorized.ok) return authorized.response;
@@ -1025,10 +1050,47 @@ async function getAuditSummary(request, env) {
   if (!sessionId) return json({ ok: false, error: "Audit session is required." }, 400);
   try {
     const data = await appsScriptPost(env, "audit/summary", { sessionId });
-    const summary = await enrichAuditSummaryWithCollectr(env, data.summary);
-    return json({ ok: true, summary });
+    return json({ ok: true, summary: prepareAuditSummary(data.summary) });
   } catch (error) {
     return json({ ok: false, error: "Audit summary failed: " + error.message }, 502);
+  }
+}
+
+async function getAuditCollectrSummaryBatch(request, env) {
+  const authorized = isAuthorized(request, env);
+  if (!authorized.ok) return authorized.response;
+  let payload;
+  try {
+    payload = await request.json();
+  } catch (_) {
+    return json({ ok: false, error: "Invalid request body." }, 400);
+  }
+  const sessionId = String(payload.sessionId || "").trim();
+  const requestedCardIds = Array.isArray(payload.cardIds)
+    ? payload.cardIds.map(normalizeCardId).filter(Boolean)
+    : [];
+  const uniqueCardIds = [...new Set(requestedCardIds)].slice(0, AUDIT_COLLECTR_BATCH_SIZE);
+  if (!sessionId) return json({ ok: false, error: "Audit session is required." }, 400);
+  if (!uniqueCardIds.length) return json({ ok: false, error: "At least one Card ID is required." }, 400);
+
+  try {
+    const data = await appsScriptPost(env, "audit/summary", { sessionId });
+    const rows = Array.isArray(data.summary && data.summary.rows) ? data.summary.rows : [];
+    const requested = new Set(uniqueCardIds);
+    const summary = {
+      ...data.summary,
+      rows: rows.filter((row) => requested.has(normalizeCardId(row.cardId)))
+    };
+    const enriched = await enrichAuditSummaryWithCollectr(env, summary);
+    return json({
+      ok: true,
+      rows: enriched.rows,
+      requestedCount: uniqueCardIds.length,
+      returnedCount: enriched.rows.length,
+      batchSize: AUDIT_COLLECTR_BATCH_SIZE
+    });
+  } catch (error) {
+    return json({ ok: false, error: "Audit Collectr batch failed: " + error.message }, 502);
   }
 }
 
@@ -1112,6 +1174,10 @@ export default {
     if (url.pathname === "/api/audit/summary") {
       if (request.method !== "POST") return json({ ok: false, error: "Method not allowed." }, 405);
       return getAuditSummary(request, env);
+    }
+    if (url.pathname === "/api/audit/collectr-summary") {
+      if (request.method !== "POST") return json({ ok: false, error: "Method not allowed." }, 405);
+      return getAuditCollectrSummaryBatch(request, env);
     }
     const response = await env.ASSETS.fetch(request);
     const headers = secureAssetHeaders(response.headers);
