@@ -59,13 +59,17 @@ const AUDIT_SCAN_HEADERS = [
   "status",
   "undone_at",
   "message_id",
-  "source_timestamp_ms"
+  "source_timestamp_ms",
+  "inventory_status",
+  "manual_review",
+  "inventory_match"
 ];
 
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu("Inventory Bot")
     .addItem("Setup Bot Sheets", "setupBotSheets")
+    .addItem("Refresh Audit Review Markers", "refreshAuditReviewMarkers")
     .addToUi();
 }
 
@@ -1083,10 +1087,121 @@ function buildAuditScanRecord_(payload) {
     scanned_at: new Date(timestampMs),
     card_id: cardId,
     status: "active",
+    inventory_status: "",
+    manual_review: "",
+    inventory_match: "",
     undone_at: "",
     message_id: String(payload.messageId || "").trim(),
     source_timestamp_ms: timestampMs
   };
+}
+
+function annotateAuditRecordInventoryStatus_(record) {
+  const fields = getAuditInventoryReviewFields_(record.card_id);
+  record.inventory_status = fields.inventory_status;
+  record.manual_review = fields.manual_review;
+  record.inventory_match = fields.inventory_match;
+  return record;
+}
+
+function getAuditInventoryReviewFields_(cardId) {
+  const item = getInventoryLookupItem_(cardId);
+  if (!item) {
+    return {
+      inventory_status: "not_found",
+      manual_review: "REVIEW: scanned Card ID was not found in Singles Inventory or Slabs Inventory.",
+      inventory_match: ""
+    };
+  }
+
+  return {
+    inventory_status: "found",
+    manual_review: "",
+    inventory_match: [
+      item.sheetName,
+      item.rowNumber ? "row " + item.rowNumber : "",
+      item.name || ""
+    ].filter(Boolean).join(" | ")
+  };
+}
+
+function refreshAuditReviewMarkers() {
+  const sessions = getSheetRows_(AUDIT_SESSIONS_SHEET);
+  if (!sessions.length) {
+    SpreadsheetApp.getUi().alert("No audit sessions found.");
+    return;
+  }
+
+  const activeSessions = sessions.filter(function (session) {
+    return String(session.status || "").trim().toLowerCase() === "active";
+  });
+  const session = (activeSessions.length ? activeSessions : sessions)[(activeSessions.length ? activeSessions : sessions).length - 1];
+  const result = refreshAuditReviewMarkersForSession_(session);
+  SpreadsheetApp.getUi().alert(
+    "Audit review markers refreshed for " + session.session_name + ".\n" +
+    "Updated rows: " + result.updatedRows + "\n" +
+    "Not found: " + result.notFoundRows
+  );
+}
+
+function refreshAuditReviewMarkersForSession_(session) {
+  const sessionSheet = getSpreadsheet_().getSheetByName(session.sheet_tab_name);
+  const sessionResult = refreshAuditReviewMarkersInSheet_(sessionSheet, session.session_id);
+  const indexResult = refreshAuditReviewMarkersInSheet_(getAuditScansSheet_(), session.session_id);
+  SpreadsheetApp.flush();
+  return {
+    updatedRows: sessionResult.updatedRows + indexResult.updatedRows,
+    notFoundRows: sessionResult.notFoundRows + indexResult.notFoundRows
+  };
+}
+
+function refreshAuditReviewMarkersInSheet_(sheet, sessionId) {
+  if (!sheet) {
+    return { updatedRows: 0, notFoundRows: 0 };
+  }
+  ensureHeaders_(sheet, AUDIT_SCAN_HEADERS);
+  const values = sheet.getDataRange().getValues();
+  if (values.length < 2) {
+    return { updatedRows: 0, notFoundRows: 0 };
+  }
+
+  const headers = values[0];
+  const sessionIndex = headers.indexOf("session_id");
+  const cardIdIndex = headers.indexOf("card_id");
+  const inventoryStatusIndex = headers.indexOf("inventory_status");
+  const manualReviewIndex = headers.indexOf("manual_review");
+  const inventoryMatchIndex = headers.indexOf("inventory_match");
+  let updatedRows = 0;
+  let notFoundRows = 0;
+
+  if (sessionIndex === -1 || cardIdIndex === -1 || inventoryStatusIndex === -1 || manualReviewIndex === -1 || inventoryMatchIndex === -1) {
+    return { updatedRows: 0, notFoundRows: 0 };
+  }
+
+  for (let rowIndex = 1; rowIndex < values.length; rowIndex += 1) {
+    const row = values[rowIndex];
+    if (String(row[sessionIndex] || "").trim() !== String(sessionId || "").trim()) {
+      continue;
+    }
+    const cardId = String(row[cardIdIndex] || "").trim();
+    if (!cardId || String(row[inventoryStatusIndex] || "").trim()) {
+      continue;
+    }
+    const fields = getAuditInventoryReviewFields_(cardId);
+    row[inventoryStatusIndex] = fields.inventory_status;
+    row[manualReviewIndex] = fields.manual_review;
+    row[inventoryMatchIndex] = fields.inventory_match;
+    updatedRows += 1;
+    if (fields.inventory_status === "not_found") {
+      notFoundRows += 1;
+    }
+  }
+
+  if (updatedRows) {
+    sheet.getRange(2, 1, values.length - 1, headers.length).setValues(values.slice(1));
+  }
+
+  return { updatedRows: updatedRows, notFoundRows: notFoundRows };
 }
 
 function writeAuditRecordToSheet_(sheet, record) {
@@ -1112,7 +1227,7 @@ function writeAuditRecordToSheet_(sheet, record) {
 }
 
 function recordAuditScan_(payload) {
-  const record = buildAuditScanRecord_(payload);
+  const record = annotateAuditRecordInventoryStatus_(buildAuditScanRecord_(payload));
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
 
