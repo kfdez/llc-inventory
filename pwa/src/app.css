@@ -520,6 +520,13 @@ summary {
   display: grid;
   gap: 8px;
 }
+.audit-log {
+  max-height: min(42vh, 520px);
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
 .cart-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -598,6 +605,9 @@ summary {
   display: grid;
   place-items: center;
   min-height: 260px;
+  max-height: none;
+  overflow: visible;
+  padding-right: 0;
   color: var(--muted);
   text-align: center;
 }
@@ -779,6 +789,9 @@ summary {
   .result-panel.empty { min-height: 150px; }
   .audit-entry, .audit-review-row {
     grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .audit-log {
+    max-height: 34vh;
   }
   .audit-review {
     max-height: 62vh;
