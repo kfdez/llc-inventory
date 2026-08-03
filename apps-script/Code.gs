@@ -123,6 +123,15 @@ function doGet(e) {
       });
     }
 
+    if (path === "audit/sessions") {
+      return jsonResponse_({
+        ok: true,
+        result: getAuditSessions_({
+          limit: e.parameter.limit
+        })
+      });
+    }
+
     return jsonResponse_({ ok: false, error: "Unknown GET path: " + path });
   } catch (error) {
     return jsonResponse_({ ok: false, error: error.message });
@@ -1017,6 +1026,25 @@ function getAuditStatus_(payload) {
   };
 }
 
+function getAuditSessions_(payload) {
+  const limit = Math.max(1, Math.min(100, Number(payload.limit || 50)));
+  const sessions = getSheetRows_(AUDIT_SESSIONS_SHEET).map(function (session) {
+    const scans = getAuditScanRowsForSession_(session);
+    const activeScans = scans.filter(function (scan) {
+      return scan.cardId && scan.status !== "undone";
+    });
+    const serialized = serializeAuditSession_(session);
+    serialized.scanCount = scans.length;
+    serialized.activeScanCount = activeScans.length;
+    serialized.undoneScanCount = scans.length - activeScans.length;
+    return serialized;
+  });
+
+  return {
+    sessions: sessions.slice(Math.max(0, sessions.length - limit)).reverse()
+  };
+}
+
 function stopAuditSession_(payload) {
   const threadId = String(payload.threadId || "").trim() || "pwa-audit";
   const endedBy = String(payload.endedBy || "").trim();
@@ -1348,14 +1376,7 @@ function getAuditSummaryStatus_(scannedCount, sheetQuantity, item) {
   return scannedCount > sheetQuantity ? "over" : "short";
 }
 
-function getAuditSummary_(payload) {
-  const sessionId = String(payload.sessionId || "").trim();
-  if (!sessionId) {
-    throw new Error("Audit session is required.");
-  }
-
-  const session = getAuditSessionById_(sessionId);
-  const scans = getAuditScanRowsForSession_(session);
+function buildAuditSummary_(session, scans, selectedSessions) {
   const activeScans = scans.filter(function (scan) {
     return scan.cardId && scan.status !== "undone";
   });
@@ -1403,7 +1424,8 @@ function getAuditSummary_(payload) {
   });
 
   return {
-    session: serializeAuditSession_(session),
+    session: session,
+    selectedSessions: selectedSessions || [session],
     generatedAt: new Date().toISOString(),
     scanCount: scans.length,
     activeScanCount: activeScans.length,
@@ -1411,6 +1433,57 @@ function getAuditSummary_(payload) {
     totals: totals,
     rows: rows
   };
+}
+
+function getGlobalAuditSummary_(sessionIds) {
+  const ids = Array.isArray(sessionIds) ? sessionIds.map(function (sessionId) {
+    return String(sessionId || "").trim();
+  }).filter(Boolean) : [];
+
+  if (!ids.length) {
+    throw new Error("At least one audit session is required.");
+  }
+  if (ids.length > 50) {
+    throw new Error("Global audit review is limited to 50 sessions at a time.");
+  }
+
+  const sessions = ids.map(function (sessionId) {
+    return getAuditSessionById_(sessionId);
+  });
+  const scans = [];
+  sessions.forEach(function (session) {
+    getAuditScanRowsForSession_(session).forEach(function (scan) {
+      scans.push(scan);
+    });
+  });
+
+  return buildAuditSummary_({
+    session_id: "global:" + ids.join(","),
+    session_name: "Global audit review",
+    sheet_tab_name: "",
+    thread_id: "pwa-audit",
+    started_at: "",
+    started_by: "PWA Scanner",
+    ended_at: "",
+    ended_by: "",
+    status: "global"
+  }, scans, sessions.map(serializeAuditSession_));
+}
+
+function getAuditSummary_(payload) {
+  const sessionIds = Array.isArray(payload.sessionIds) ? payload.sessionIds : [];
+  if (sessionIds.length) {
+    return getGlobalAuditSummary_(sessionIds);
+  }
+
+  const sessionId = String(payload.sessionId || "").trim();
+  if (!sessionId) {
+    throw new Error("Audit session is required.");
+  }
+
+  const session = getAuditSessionById_(sessionId);
+  const scans = getAuditScanRowsForSession_(session);
+  return buildAuditSummary_(serializeAuditSession_(session), scans);
 }
 
 function getSessionById_(sessionId) {

@@ -1062,6 +1062,24 @@ async function getAuditStatus(request, env) {
   }
 }
 
+async function getAuditSessions(request, env) {
+  const authorized = isAuthorized(request, env);
+  if (!authorized.ok) return authorized.response;
+  try {
+    const requestUrl = new URL(request.url);
+    const data = await appsScriptGet(env, "audit/sessions", {
+      limit: requestUrl.searchParams.get("limit") || 50
+    });
+    const result = data.result || {};
+    return json({
+      ok: true,
+      sessions: Array.isArray(result.sessions) ? result.sessions : []
+    });
+  } catch (error) {
+    return json({ ok: false, error: "Audit sessions failed: " + error.message }, 502);
+  }
+}
+
 async function undoAuditScan(request, env) {
   const authorized = isAuthorized(request, env);
   if (!authorized.ok) return authorized.response;
@@ -1260,8 +1278,15 @@ async function getAuditSummary(request, env) {
     return json({ ok: false, error: "Invalid request body." }, 400);
   }
   const sessionId = String(payload.sessionId || "").trim();
-  if (!sessionId) return json({ ok: false, error: "Audit session is required." }, 400);
+  const sessionIds = Array.isArray(payload.sessionIds)
+    ? payload.sessionIds.map((sessionId) => String(sessionId || "").trim()).filter(Boolean)
+    : [];
+  if (!sessionId && !sessionIds.length) return json({ ok: false, error: "Audit session is required." }, 400);
   try {
+    if (sessionIds.length) {
+      const data = await appsScriptPost(env, "audit/summary", { sessionIds });
+      return json({ ok: true, summary: prepareAuditSummary(data.summary) });
+    }
     const fastSummary = await getFastAuditSummary(env, sessionId);
     if (fastSummary) return json({ ok: true, summary: prepareAuditSummary(fastSummary) });
     const data = await appsScriptPost(env, "audit/summary", { sessionId });
@@ -1447,6 +1472,10 @@ export default {
     if (url.pathname === "/api/audit/status") {
       if (request.method !== "GET") return json({ ok: false, error: "Method not allowed." }, 405);
       return getAuditStatus(request, env);
+    }
+    if (url.pathname === "/api/audit/sessions") {
+      if (request.method !== "GET") return json({ ok: false, error: "Method not allowed." }, 405);
+      return getAuditSessions(request, env);
     }
     if (url.pathname === "/api/audit/undo") {
       if (request.method !== "POST") return json({ ok: false, error: "Method not allowed." }, 405);

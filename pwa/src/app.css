@@ -706,6 +706,53 @@ summary {
 .audit-review-progress span {
   min-width: 0;
 }
+.audit-review-context {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: .76rem;
+  line-height: 1.35;
+}
+.audit-session-picker {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: 10px;
+}
+.audit-picker-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.audit-picker-heading strong, .audit-session-option strong {
+  display: block;
+}
+.audit-picker-heading span, .audit-session-option small {
+  display: block;
+  color: var(--muted);
+  font-size: .72rem;
+}
+.audit-session-list {
+  display: grid;
+  gap: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+.audit-session-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+}
+.audit-session-option input {
+  width: 18px;
+  height: 18px;
+}
 .audit-review-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;

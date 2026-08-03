@@ -135,6 +135,39 @@ test("audit status returns the active Apps Script audit session", async () => {
   }
 });
 
+test("audit sessions endpoint returns recent audit sessions", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const requestUrl = new URL(String(url));
+    assert.equal(requestUrl.searchParams.get("path"), "audit/sessions");
+    assert.equal(requestUrl.searchParams.get("limit"), "50");
+    return Response.json({
+      ok: true,
+      result: {
+        sessions: [{
+          session_id: "session-1",
+          session_name: "Binder 1",
+          status: "ended",
+          activeScanCount: 25
+        }]
+      }
+    });
+  };
+
+  try {
+    const env = { APP_PIN: "482913", APPS_SCRIPT_API_BASE_URL: "https://script.example/exec" };
+    const response = await worker.fetch(new Request("https://scanner.test/api/audit/sessions", {
+      headers: { "X-App-Pin": "482913" }
+    }), env, {});
+    const data = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(data.ok, true);
+    assert.equal(data.sessions[0].session_name, "Binder 1");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("audit summary returns sheet review before Collectr enrichment", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
@@ -191,6 +224,51 @@ test("audit summary returns sheet review before Collectr enrichment", async () =
     assert.equal(data.summary.rows[0].collectrPending, true);
     assert.equal(data.summary.rows[0].collectrLoaded, false);
     assert.equal(data.summary.collectr.pendingCount, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("audit summary can request a global multi-session review", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    const requestUrl = new URL(String(url));
+    assert.equal(requestUrl.host, "script.example");
+    const body = JSON.parse(options.body);
+    assert.equal(body.path, "audit/summary");
+    assert.deepEqual(body.payload.sessionIds, ["session-1", "session-2"]);
+    return Response.json({
+      ok: true,
+      summary: {
+        session: { session_id: "global:session-1,session-2", session_name: "Global audit review" },
+        selectedSessions: [
+          { session_id: "session-1", session_name: "Binder 1" },
+          { session_id: "session-2", session_name: "Box A" }
+        ],
+        rows: [{
+          cardId: "KYL-S-ABC12345",
+          scannedCount: 2,
+          sheetQuantity: 2,
+          status: "match",
+          item: { cardId: "KYL-S-ABC12345" }
+        }],
+        totals: { scannedCount: 2, uniqueCount: 1, issueCount: 0, sheetQuantity: 2 }
+      }
+    });
+  };
+
+  try {
+    const env = { APP_PIN: "482913", APPS_SCRIPT_API_BASE_URL: "https://script.example/exec" };
+    const response = await worker.fetch(new Request("https://scanner.test/api/audit/summary", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-App-Pin": "482913" },
+      body: JSON.stringify({ sessionIds: ["session-1", "session-2"] })
+    }), env, {});
+    const data = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(data.ok, true);
+    assert.equal(data.summary.selectedSessions.length, 2);
+    assert.equal(data.summary.rows[0].scannedCount, 2);
   } finally {
     globalThis.fetch = originalFetch;
   }

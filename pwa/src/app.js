@@ -35,6 +35,7 @@ const elements = {
   captureAuditQrButton: document.querySelector("#captureAuditQrButton"),
   stopAuditButton: document.querySelector("#stopAuditButton"),
   auditSummaryButton: document.querySelector("#auditSummaryButton"),
+  globalAuditButton: document.querySelector("#globalAuditButton"),
   auditSessionText: document.querySelector("#auditSessionText"),
   auditScanCount: document.querySelector("#auditScanCount"),
   auditStatusText: document.querySelector("#auditStatusText"),
@@ -435,6 +436,7 @@ function renderAuditSummary() {
   const issueRows = rows.filter((row) => row.status !== "match");
   const visibleRows = issueRows.concat(rows.filter((row) => row.status === "match"));
   const syncableRows = getSyncableAuditReviewRows();
+  const selectedSessions = Array.isArray(auditSummary.selectedSessions) ? auditSummary.selectedSessions : [];
   elements.auditSummaryPanel.hidden = false;
   elements.auditSummaryPanel.innerHTML = `<div class="audit-review-totals">
     <div><span>Unique</span><strong>${Number(totals.uniqueCount || 0)}</strong></div>
@@ -442,6 +444,7 @@ function renderAuditSummary() {
     <div><span>Sheet qty</span><strong>${Number(totals.sheetQuantity || 0)}</strong></div>
     <div><span>Collectr qty</span><strong>${Number(totals.collectrQuantity || 0)}</strong></div>
   </div>
+  ${selectedSessions.length > 1 ? `<div class="audit-review-context">${selectedSessions.length} locations combined: ${escapeHtml(selectedSessions.map((session) => session.session_name).join(", "))}</div>` : ""}
   ${collectr.pendingCount || auditCollectrLoadRunning || auditCollectrLoadStopped ? `<div class="audit-review-progress"><span>${auditCollectrLoadStopped ? "Collectr check stopped" : auditCollectrLoadRunning ? "Collectr check running on VPS" : "Collectr check"} ${Number(collectr.loadedCount || 0)}/${Number((collectr.loadedCount || 0) + (collectr.pendingCount || 0))} loaded.</span>${auditCollectrLoadRunning ? `<button type="button" class="secondary compact-button" data-audit-action="stop-collectr-load">Stop</button>` : ""}</div>` : ""}
   ${syncableRows.length || auditCollectrSyncAllRunning ? `<div class="audit-review-progress audit-review-bulk"><span>${auditCollectrSyncAllRunning ? "Sync all running " + auditCollectrSyncAllCompleted + "/" + auditCollectrSyncAllTotal + " synced" + (auditCollectrSyncAllFailed ? " · " + auditCollectrSyncAllFailed + " failed" : "") : syncableRows.length + " Collectr update" + (syncableRows.length === 1 ? "" : "s") + " ready"}</span>${syncableRows.length ? `<button type="button" class="secondary compact-button" data-audit-action="sync-all-collectr" ${auditCollectrSyncAllRunning ? "disabled" : ""}>Sync all</button>` : ""}</div>` : ""}
   <div class="audit-review-list">
@@ -682,6 +685,75 @@ async function loadAuditSummary(sessionId) {
   saveAuditState();
   renderAuditState();
   void loadAuditCollectrSummaryBatches(normalizedSessionId, loadVersion);
+  return auditSummary;
+}
+
+async function loadGlobalAuditSessions() {
+  elements.auditSummaryPanel.hidden = false;
+  elements.auditSummaryPanel.innerHTML = `<div class="audit-review-empty">Loading audit sessions...</div>`;
+  const response = await authenticatedFetch("/api/audit/sessions?limit=50");
+  const data = await response.json();
+  if (response.status === 401) {
+    lock();
+    throw new Error("Scanner PIN expired. Unlock the app again.");
+  }
+  if (!response.ok || !data.ok) throw new Error(data.error || "Unable to load audit sessions.");
+  renderGlobalAuditSessionPicker(Array.isArray(data.sessions) ? data.sessions : []);
+}
+
+function renderGlobalAuditSessionPicker(sessions) {
+  elements.auditSummaryPanel.hidden = false;
+  const rows = sessions.filter((session) => Number(session.activeScanCount || 0) > 0);
+  elements.auditSummaryPanel.innerHTML = `<form class="audit-session-picker" id="globalAuditSessionForm">
+    <div class="audit-picker-heading">
+      <div><strong>Global audit review</strong><span>Select every binder or box that should count toward total inventory.</span></div>
+      <button type="submit" class="secondary compact-button" ${rows.length ? "" : "disabled"}>Review selected</button>
+    </div>
+    <div class="audit-session-list">
+      ${rows.length ? rows.map((session, index) => {
+        const checked = index < Math.min(rows.length, 12) ? "checked" : "";
+        const meta = [session.status || "", Number(session.activeScanCount || 0) + " scans"].filter(Boolean).join(" | ");
+        return `<label class="audit-session-option">
+          <input type="checkbox" name="sessionId" value="${escapeHtml(session.session_id)}" ${checked}>
+          <span><strong>${escapeHtml(session.session_name || session.session_id)}</strong><small>${escapeHtml(meta)}</small></span>
+        </label>`;
+      }).join("") : `<div class="audit-review-empty">No audit sessions with scans found.</div>`}
+    </div>
+  </form>`;
+}
+
+async function loadGlobalAuditSummary(sessionIds) {
+  const ids = (Array.isArray(sessionIds) ? sessionIds : []).map((sessionId) => String(sessionId || "").trim()).filter(Boolean);
+  if (!ids.length) throw new Error("Select at least one audit session.");
+  cancelAuditCollectrLoading({ render: false });
+  const loadVersion = auditSummaryLoadVersion + 1;
+  auditSummaryLoadVersion = loadVersion;
+  lastAuditReviewSessionId = "global:" + ids.join(",");
+  auditSummary = null;
+  auditCollectrLoadRunning = false;
+  auditCollectrLoadStopped = false;
+  auditCollectrJobId = "";
+  saveAuditState();
+  renderAuditState();
+  elements.auditSummaryPanel.hidden = false;
+  elements.auditSummaryPanel.innerHTML = `<div class="audit-review-empty">Loading global audit review...</div>`;
+  const response = await fetch("/api/audit/summary", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-App-Pin": pin },
+    body: JSON.stringify({ sessionIds: ids })
+  });
+  const data = await response.json();
+  if (response.status === 401) {
+    lock();
+    throw new Error("Scanner PIN expired. Unlock the app again.");
+  }
+  if (!response.ok || !data.ok) throw new Error(data.error || "Unable to load global audit summary.");
+  if (loadVersion !== auditSummaryLoadVersion) return auditSummary;
+  auditSummary = data.summary;
+  recomputeAuditSummaryTotals();
+  saveAuditState();
+  renderAuditState();
+  void loadAuditCollectrSummaryBatches(lastAuditReviewSessionId, loadVersion);
   return auditSummary;
 }
 
@@ -1437,6 +1509,17 @@ elements.auditSummaryButton.addEventListener("click", async () => {
     elements.auditSessionText.textContent = error.message;
   }
 });
+elements.globalAuditButton.addEventListener("click", async () => {
+  elements.auditSessionText.textContent = "Loading global audit sessions...";
+  try {
+    await loadGlobalAuditSessions();
+    setStatus("Select sessions", "success");
+    elements.cameraMessage.textContent = "Select every binder or box to include in the global review.";
+  } catch (error) {
+    setErrorStatus("Audit error", error.message);
+    elements.auditSessionText.textContent = error.message;
+  }
+});
 elements.clearAuditLogButton.addEventListener("click", () => {
   auditLog = auditLog.filter((entry) => entry.status === "pending" || entry.status === "syncing" || entry.status === "undoing");
   saveAuditState();
@@ -1453,6 +1536,21 @@ elements.auditLog.addEventListener("click", (event) => {
   } else if (button.dataset.auditAction === "retry") {
     updateAuditLogEntry(recordKey, { status: "pending", kind: "", attempts: 0, message: "Queued" });
     void drainAuditSaveQueue();
+  }
+});
+elements.auditSummaryPanel.addEventListener("submit", async (event) => {
+  const form = event.target.closest("#globalAuditSessionForm");
+  if (!form) return;
+  event.preventDefault();
+  const sessionIds = [...form.querySelectorAll("input[name='sessionId']:checked")].map((input) => input.value);
+  elements.auditSessionText.textContent = "Loading global audit review...";
+  try {
+    await loadGlobalAuditSummary(sessionIds);
+    setStatus("Global review ready", "success");
+    elements.cameraMessage.textContent = "Global audit review loaded. Use Sync all only after every location is included.";
+  } catch (error) {
+    setErrorStatus("Audit error", error.message);
+    elements.auditSessionText.textContent = error.message;
   }
 });
 elements.auditSummaryPanel.addEventListener("click", async (event) => {
