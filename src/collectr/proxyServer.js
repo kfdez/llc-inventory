@@ -131,7 +131,7 @@ function startCollectrProxyServer({ config, logger, store }) {
     try {
       body = await readJsonBody(request);
       method = String(body.method || "GET").trim().toUpperCase();
-      if (["GET", "POST"].indexOf(method) === -1) {
+      if (["GET", "POST", "PUT"].indexOf(method) === -1) {
         throw new Error("Collectr method is not allowed.");
       }
       const data = await fetchCollectrJson(config.collectrProxy, body.path, body.query || {}, {
@@ -143,9 +143,10 @@ function startCollectrProxyServer({ config, logger, store }) {
           method,
           path: body.path,
           collectionId: body.query && body.query.collectionId,
-          quantity: body.body && body.body.quantity,
-          subType: body.body && body.body.subType,
-          gradeId: body.body && body.body.gradeId
+        quantity: body.body && body.body.quantity,
+        purchasePriceCount: body.body && Array.isArray(body.body.data) ? body.body.data.length : undefined,
+        subType: body.body && body.body.subType,
+        gradeId: body.body && body.body.gradeId
         }, "Collectr proxy write succeeded.");
       }
       sendJson(response, 200, { ok: true, data });
@@ -156,6 +157,7 @@ function startCollectrProxyServer({ config, logger, store }) {
         path: body.path,
         collectionId: body.query && body.query.collectionId,
         quantity: body.body && body.body.quantity,
+        purchasePriceCount: body.body && Array.isArray(body.body.data) ? body.body.data.length : undefined,
         subType: body.body && body.body.subType,
         gradeId: body.body && body.body.gradeId,
         upstreamStatus: error.status

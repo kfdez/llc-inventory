@@ -605,6 +605,155 @@ test("collectr quantity update posts target quantity through the VPS proxy", asy
   }
 });
 
+test("collectr quantity update trims purchase prices before retrying a lower quantity", async () => {
+  const originalFetch = globalThis.fetch;
+  const proxyBodies = [];
+  let quantityAttempts = 0;
+  let purchasePricesTrimmed = false;
+  globalThis.fetch = async (url, options = {}) => {
+    const requestUrl = new URL(String(url));
+
+    if (requestUrl.host === "script.example") {
+      assert.equal(requestUrl.searchParams.get("path"), "inventory/lookup-snapshot");
+      return Response.json({
+        ok: true,
+        snapshot: {
+          itemsById: {
+            "KYL-S-ABC12345": {
+              cardId: "KYL-S-ABC12345",
+              portfolioName: "KYL",
+              setName: "Mega Evolution Promos",
+              name: "Chimchar",
+              cardNumber: "041",
+              variance: "Holofoil"
+            }
+          }
+        }
+      });
+    }
+
+    if (requestUrl.host === "proxy.example") {
+      const body = JSON.parse(options.body);
+      proxyBodies.push(body);
+      if (body.path.endsWith("/collections")) {
+        return Response.json({ ok: true, data: { data: [{ id: "portfolio-1", name: "KYL" }] } });
+      }
+      if (body.path === "/catalog") {
+        return Response.json({
+          ok: true,
+          data: {
+            data: [{
+              product_id: "684465",
+              catalog_group: "Mega Evolution Promos",
+              product_name: "Chimchar ",
+              card_number: "041",
+              product_sub_type: "Holofoil"
+            }]
+          }
+        });
+      }
+      if (body.path === "/collections/account-1/products" && body.method !== "POST") {
+        return Response.json({
+          ok: true,
+          data: {
+            data: [{
+              product_id: "684465",
+              user_owned_product_id: "owned-1",
+              quantity: purchasePricesTrimmed ? "1" : "2",
+              grade_id: "52",
+              product_sub_type: "Holofoil"
+            }]
+          }
+        });
+      }
+      if (body.path === "/collections/account-1/products/684465" && body.method !== "POST") {
+        return Response.json({
+          ok: true,
+          data: {
+            data: {
+              product_id: "684465",
+              product_name: "Chimchar ",
+              catalog_group: "Mega Evolution Promos",
+              card_number: "041",
+              ungraded_sub_types: [{
+                product_sub_type: "Holofoil",
+                grade_id: "52",
+                quantity: purchasePricesTrimmed ? 1 : 2,
+                user_owned_product_id: "owned-1"
+              }]
+            }
+          }
+        });
+      }
+      if (body.path === "/collections/account-1/products/684465") {
+        assert.equal(body.method, "POST");
+        assert.equal(body.query.collectionId, "portfolio-1");
+        assert.deepEqual(body.body, { subType: "Holofoil", gradeId: "52", quantity: 1 });
+        quantityAttempts += 1;
+        if (quantityAttempts === 1) {
+          return Response.json({ ok: false, error: "Quantity in purchase price exceeds quantity in product owned" }, { status: 400 });
+        }
+        return Response.json({ ok: true, data: { ok: true } });
+      }
+      if (body.path === "/collections/account-1/products/owned/owned-1/purchase-prices" && body.method === "GET") {
+        return Response.json({
+          ok: true,
+          data: {
+            data: [
+              { id: "price-1", quantity: "1", purchase_date: "2026-06-04", purchase_price: null, note: "", card_condition_id: "NM", vault_service_id: null },
+              { id: "price-2", quantity: "1", purchase_date: "2026-06-04", purchase_price: null, note: "", card_condition_id: "NM", vault_service_id: null }
+            ]
+          }
+        });
+      }
+      if (body.path === "/collections/account-1/products/owned/owned-1/purchase-prices" && body.method === "PUT") {
+        assert.deepEqual(body.body, {
+          currency: "CAD",
+          data: [{
+            id: "price-2",
+            quantity: 1,
+            purchase_date: "2026-06-04",
+            purchase_price: null,
+            note: "",
+            card_condition_id: "NM",
+            vault_service_id: null
+          }]
+        });
+        purchasePricesTrimmed = true;
+        return Response.json({ ok: true, data: { data: body.body.data } });
+      }
+    }
+
+    throw new Error("Unexpected fetch: " + requestUrl.toString());
+  };
+
+  try {
+    const env = {
+      APP_PIN: "482913",
+      APPS_SCRIPT_API_BASE_URL: "https://script.example/exec",
+      COLLECTR_ACCOUNT_ID: "account-1",
+      COLLECTR_PROXY_BASE_URL: "https://proxy.example/llc-inventory-v2-collectr/",
+      COLLECTR_PROXY_SECRET: "proxy-secret",
+      COLLECTR_CURRENCY: "CAD"
+    };
+    const response = await worker.fetch(new Request("https://scanner.test/api/collectr/quantity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-App-Pin": "482913" },
+      body: JSON.stringify({ cardId: "KYL-S-ABC12345", targetQuantity: 1 })
+    }), env, {});
+    const data = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(data.ok, true);
+    assert.equal(quantityAttempts, 2);
+    assert.equal(data.result.purchasePriceAdjustment.previousPurchasePriceRows, 2);
+    assert.equal(data.result.purchasePriceAdjustment.currentPurchasePriceRows, 1);
+    assert.equal(data.result.collectr.currentQuantity, 1);
+    assert.ok(proxyBodies.some((body) => body.path === "/collections/account-1/products/owned/owned-1/purchase-prices" && body.method === "PUT"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("audit Collectr job start proxies review rows to the VPS", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options = {}) => {

@@ -2,6 +2,7 @@ const ALLOWED_COLLECTR_PATHS = [
   /^\/accounts\/[^/]+\/collections$/,
   /^\/collections\/[^/]+\/products$/,
   /^\/collections\/[^/]+\/products\/[^/]+$/,
+  /^\/collections\/[^/]+\/products\/owned\/[^/]+\/purchase-prices$/,
   /^\/catalog$/
 ];
 

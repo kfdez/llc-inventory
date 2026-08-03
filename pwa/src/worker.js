@@ -286,6 +286,10 @@ function buildCollectrProxyEndpoint(proxyBaseUrl, path) {
   return new URL(String(path || "").replace(/^\/+/, ""), normalizedBase);
 }
 
+function isPurchasePriceQuantityError(error) {
+  return /quantity in purchase price exceeds quantity in product owned/i.test(String(error && error.message || error || ""));
+}
+
 async function collectrRequestJson(env, path, query = {}, options = {}) {
   const config = requireCollectrConfig(env);
   const method = String(options.method || "GET").toUpperCase();
@@ -314,7 +318,10 @@ async function collectrRequestJson(env, path, query = {}, options = {}) {
       );
     }
     if (!response.ok || !data.ok) {
-      throw new Error(data.error || "Collectr proxy request failed with HTTP " + response.status + ".");
+      const error = new Error(data.error || "Collectr proxy request failed with HTTP " + response.status + ".");
+      error.status = response.status;
+      error.response = data;
+      throw error;
     }
     return data.data;
   }
@@ -349,7 +356,10 @@ async function collectrRequestJson(env, path, query = {}, options = {}) {
     );
   }
   if (!response.ok) {
-    throw new Error(data.error || data.message || "Collectr request failed with HTTP " + response.status + ".");
+    const error = new Error(data.error || data.message || "Collectr request failed with HTTP " + response.status + ".");
+    error.status = response.status;
+    error.response = data;
+    throw error;
   }
   return data;
 }
@@ -396,12 +406,42 @@ function collectrPostJson(env, path, query = {}, body = {}) {
   return collectrRequestJson(env, path, query, { method: "POST", body });
 }
 
+function collectrPutJson(env, path, query = {}, body = {}) {
+  return collectrRequestJson(env, path, query, { method: "PUT", body });
+}
+
 function humanizeCollectrError(error) {
   const message = String(error && error.message || error || "");
-  if (/quantity in purchase price exceeds quantity in product owned/i.test(message)) {
+  if (isPurchasePriceQuantityError(error)) {
     return "Collectr rejected this update because this owned item has price-paid entries for more copies than the target quantity. Lower or remove the price-paid entries in Collectr first, or set the quantity to at least the price-paid quantity.";
   }
   return message || "Collectr request failed.";
+}
+
+function normalizeCollectrPurchasePriceRow(row) {
+  return {
+    id: String(row.id || "").trim(),
+    quantity: Number(row.quantity || 0),
+    purchase_date: row.purchase_date || null,
+    purchase_price: row.purchase_price === undefined ? null : row.purchase_price,
+    note: row.note || "",
+    card_condition_id: row.card_condition_id || null,
+    vault_service_id: row.vault_service_id || null
+  };
+}
+
+function trimCollectrPurchasePriceRows(rows, targetQuantity) {
+  let remaining = targetQuantity;
+  const output = [];
+  for (const row of rows.slice().reverse()) {
+    if (remaining <= 0) break;
+    const normalized = normalizeCollectrPurchasePriceRow(row);
+    if (!normalized.id || normalized.quantity <= 0) continue;
+    const quantity = Math.min(normalized.quantity, remaining);
+    output.unshift({ ...normalized, quantity });
+    remaining -= quantity;
+  }
+  return output;
 }
 
 async function fetchCollectrPortfolios(env) {
@@ -555,6 +595,35 @@ async function fetchCollectrProductDetailLines(env, portfolioId, productId) {
   return flattenCollectrProductDetailLines(data);
 }
 
+async function fetchCollectrPurchasePrices(env, userOwnedProductId) {
+  const config = requireCollectrConfig(env);
+  const data = await collectrGetJson(
+    env,
+    "/collections/" + encodeURIComponent(config.accountId) + "/products/owned/" + encodeURIComponent(userOwnedProductId) + "/purchase-prices",
+    { currency: config.currency }
+  );
+  return Array.isArray(data.data) ? data.data : [];
+}
+
+async function trimCollectrPurchasePrices(env, userOwnedProductId, targetQuantity) {
+  const config = requireCollectrConfig(env);
+  const rows = await fetchCollectrPurchasePrices(env, userOwnedProductId);
+  const trimmedRows = trimCollectrPurchasePriceRows(rows, targetQuantity);
+  await collectrPutJson(
+    env,
+    "/collections/" + encodeURIComponent(config.accountId) + "/products/owned/" + encodeURIComponent(userOwnedProductId) + "/purchase-prices",
+    {},
+    {
+      currency: config.currency,
+      data: trimmedRows
+    }
+  );
+  return {
+    previousPurchasePriceRows: rows.length,
+    currentPurchasePriceRows: trimmedRows.length
+  };
+}
+
 async function resolveCollectrItem(env, item) {
   const portfolios = await fetchCollectrPortfolios(env);
   const portfolioResolution = resolveCollectrPortfolio(item, portfolios);
@@ -646,6 +715,7 @@ async function setCollectrItemQuantity(env, item, targetQuantity) {
     gradeId: resolved.product.gradeId || item.collectrGradeId || "",
     quantity: targetQuantity
   };
+  let purchasePriceAdjustment = null;
   try {
     await collectrPostJson(
       env,
@@ -654,9 +724,19 @@ async function setCollectrItemQuantity(env, item, targetQuantity) {
       body
     );
   } catch (error) {
-    const friendly = new Error(humanizeCollectrError(error));
-    friendly.cause = error;
-    throw friendly;
+    if (isPurchasePriceQuantityError(error) && resolved.product.userOwnedProductId) {
+      purchasePriceAdjustment = await trimCollectrPurchasePrices(env, resolved.product.userOwnedProductId, targetQuantity);
+      await collectrPostJson(
+        env,
+        "/collections/" + encodeURIComponent(requireCollectrConfig(env).accountId) + "/products/" + encodeURIComponent(resolved.product.id),
+        { collectionId: resolved.portfolio.id },
+        body
+      );
+    } else {
+      const friendly = new Error(humanizeCollectrError(error));
+      friendly.cause = error;
+      throw friendly;
+    }
   }
   collectrPortfolioCache = null;
   const refreshedRows = await fetchCollectrProductDetailLines(env, resolved.portfolio.id, resolved.product.id);
@@ -676,6 +756,7 @@ async function setCollectrItemQuantity(env, item, targetQuantity) {
       verifiedQuantity
     },
     targetQuantity,
+    purchasePriceAdjustment,
     verified: verifiedQuantity === targetQuantity
   };
 }

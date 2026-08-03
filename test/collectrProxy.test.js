@@ -12,8 +12,10 @@ test("Collectr proxy only allows expected read paths", () => {
   assert.equal(isAllowedCollectrPath("/accounts/account-1/collections"), true);
   assert.equal(isAllowedCollectrPath("/collections/account-1/products"), true);
   assert.equal(isAllowedCollectrPath("/collections/account-1/products/642585"), true);
+  assert.equal(isAllowedCollectrPath("/collections/account-1/products/owned/owned-1/purchase-prices"), true);
   assert.equal(isAllowedCollectrPath("/catalog"), true);
   assert.equal(isAllowedCollectrPath("/collections/account-1/products/123/history"), false);
+  assert.equal(isAllowedCollectrPath("/collections/account-1/products/owned/owned-1/history"), false);
   assert.equal(isAllowedCollectrPath("/accounts/account-1/profile"), false);
 });
 
