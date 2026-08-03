@@ -924,6 +924,7 @@ async function recordAuditScan(request, env) {
   }
   const sessionId = String(payload.sessionId || "").trim();
   const cardId = String(payload.cardId || "").trim();
+  const notes = String(payload.notes || "").trim().slice(0, 1000);
   if (!sessionId) return json({ ok: false, error: "Audit session is required." }, 400);
   if (!cardId || cardId.length > 200) return json({ ok: false, error: "A valid Card ID is required." }, 400);
   try {
@@ -936,6 +937,7 @@ async function recordAuditScan(request, env) {
       senderName: "PWA Scanner",
       scans: [{
         cardId,
+        notes,
         qrIndex: 0,
         recordKey: String(payload.recordKey || crypto.randomUUID()).trim(),
         payloadHash: cardId

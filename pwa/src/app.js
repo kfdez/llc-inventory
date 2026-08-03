@@ -792,9 +792,10 @@ function buildAuditScanEntry(cardId, sessionId) {
     name: cardId,
     setName: "",
     attempts: 0,
-    status: "pending",
+    status: "checking",
     kind: "",
-    message: "Queued"
+    message: "Checking inventory",
+    notes: ""
   };
 }
 
@@ -805,13 +806,20 @@ function queueAuditScan(cardId) {
   const entry = buildAuditScanEntry(cardId, auditSession.session_id);
   auditScanCount += 1;
   addAuditLogEntry(entry);
-  void enrichAuditEntry(entry.recordKey, cardId);
-  setStatus("Audit queued", "success");
-  elements.cameraMessage.textContent = cardId + " queued. Keep scanning.";
-  void drainAuditSaveQueue();
+  void prepareAuditScanEntry(entry.recordKey, cardId);
+  setStatus("Checking audit ID", "success");
+  elements.cameraMessage.textContent = cardId + " detected. Checking inventory before saving.";
 }
 
-async function enrichAuditEntry(recordKey, cardId) {
+function promptForMissingAuditNotes(cardId) {
+  const value = window.prompt(
+    "This Card ID was not found in the sheet.\n\nEnter notes to help review it manually:",
+    ""
+  );
+  return String(value || "").trim();
+}
+
+async function prepareAuditScanEntry(recordKey, cardId) {
   try {
     const response = await authenticatedFetch("/api/lookup?cardId=" + encodeURIComponent(cardId));
     const data = await response.json();
@@ -821,24 +829,32 @@ async function enrichAuditEntry(recordKey, cardId) {
     }
     if (!response.ok || !data.ok) throw new Error(data.error || "Lookup failed.");
     if (!data.item) {
+      const notes = promptForMissingAuditNotes(cardId);
       updateAuditLogEntry(recordKey, {
         name: cardId,
         setName: "",
         kind: "issue",
-        message: "ID not found in inventory; queued for review"
+        notes,
+        status: "pending",
+        message: notes ? "Missing ID noted; queued for review" : "Missing ID queued for review"
       });
+      void drainAuditSaveQueue();
       return;
     }
     updateAuditLogEntry(recordKey, {
       name: data.item.name || cardId,
       setName: data.item.setName || "",
+      status: "pending",
       kind: "",
-      message: auditLog.find((entry) => entry.recordKey === recordKey)?.message || "Queued"
+      message: "Queued"
     });
+    void drainAuditSaveQueue();
   } catch (error) {
     updateAuditLogEntry(recordKey, {
+      status: "pending",
       message: "Queued; lookup details failed: " + error.message
     });
+    void drainAuditSaveQueue();
   }
 }
 
@@ -851,7 +867,8 @@ async function sendAuditScan(entry) {
     body: JSON.stringify({
       sessionId,
       cardId: entry.cardId,
-      recordKey: entry.recordKey
+      recordKey: entry.recordKey,
+      notes: entry.notes || ""
     })
   });
   const data = await response.json();

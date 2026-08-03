@@ -62,7 +62,8 @@ const AUDIT_SCAN_HEADERS = [
   "source_timestamp_ms",
   "inventory_status",
   "manual_review",
-  "inventory_match"
+  "inventory_match",
+  "notes"
 ];
 
 function onOpen() {
@@ -1090,6 +1091,7 @@ function buildAuditScanRecord_(payload) {
     inventory_status: "",
     manual_review: "",
     inventory_match: "",
+    notes: String(payload.notes || scan.notes || "").trim(),
     undone_at: "",
     message_id: String(payload.messageId || "").trim(),
     source_timestamp_ms: timestampMs

@@ -62,6 +62,7 @@ test("audit scan forwards card ID in the Apps Script scan payload", async () => 
     assert.equal(body.payload.sessionId, "session-1");
     assert.equal(body.payload.scans[0].cardId, "AL-S-E51F26CF");
     assert.equal(body.payload.scans[0].recordKey, "record-1");
+    assert.equal(body.payload.scans[0].notes, "Missing from binder export");
     return Response.json({
       ok: true,
       result: {
@@ -81,7 +82,8 @@ test("audit scan forwards card ID in the Apps Script scan payload", async () => 
       body: JSON.stringify({
         sessionId: "session-1",
         cardId: "AL-S-E51F26CF",
-        recordKey: "record-1"
+        recordKey: "record-1",
+        notes: "Missing from binder export"
       })
     }), env, {});
     const data = await response.json();
