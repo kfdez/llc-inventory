@@ -64,6 +64,7 @@ function flattenProductDetailLines(data) {
 function getSummaryStatus(row) {
   if (!row.item) return "not-in-sheet";
   if (row.collectrError) return row.status === "match" ? "collectr-error" : row.status;
+  if (row.unscanned || (Number(row.scannedCount || 0) === 0 && Number(row.sheetQuantity || 0) > 0)) return "unscanned";
   if (row.collectrQuantity === null || row.collectrQuantity === undefined) return row.status;
   if (Number(row.scannedCount || 0) === Number(row.sheetQuantity || 0) &&
       Number(row.scannedCount || 0) === Number(row.collectrQuantity || 0)) {

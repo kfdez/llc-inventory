@@ -1376,7 +1376,8 @@ function getAuditSummaryStatus_(scannedCount, sheetQuantity, item) {
   return scannedCount > sheetQuantity ? "over" : "short";
 }
 
-function buildAuditSummary_(session, scans, selectedSessions) {
+function buildAuditSummary_(session, scans, selectedSessions, options) {
+  const summaryOptions = options || {};
   const activeScans = scans.filter(function (scan) {
     return scan.cardId && scan.status !== "undone";
   });
@@ -1395,11 +1396,29 @@ function buildAuditSummary_(session, scans, selectedSessions) {
     grouped[normalizedCardId].recordKeys.push(scan.recordKey);
   });
 
+  if (summaryOptions.includeUnscannedInventory) {
+    const inventorySnapshot = getInventoryLookupSnapshot_();
+    Object.keys(inventorySnapshot.itemsById || {}).forEach(function (normalizedCardId) {
+      const item = inventorySnapshot.itemsById[normalizedCardId];
+      const sheetQuantity = Number(item.quantity || 0);
+      if (sheetQuantity <= 0 || grouped[normalizedCardId]) {
+        return;
+      }
+      grouped[normalizedCardId] = {
+        cardId: item.cardId || normalizedCardId,
+        scannedCount: 0,
+        sheetQuantity: sheetQuantity,
+        recordKeys: [],
+        item: item
+      };
+    });
+  }
+
   const rows = Object.keys(grouped).sort().map(function (cardId) {
     const group = grouped[cardId];
-    const item = getInventoryLookupItem_(group.cardId);
-    const sheetQuantity = item ? Number(item.quantity || 0) : 0;
-    return {
+    const item = group.item || getInventoryLookupItem_(group.cardId);
+    const sheetQuantity = group.sheetQuantity !== undefined ? group.sheetQuantity : item ? Number(item.quantity || 0) : 0;
+    const row = {
       cardId: group.cardId,
       scannedCount: group.scannedCount,
       sheetQuantity: sheetQuantity,
@@ -1408,6 +1427,11 @@ function buildAuditSummary_(session, scans, selectedSessions) {
       item: item,
       recordKeys: group.recordKeys
     };
+    row.unscanned = !!(item && group.scannedCount === 0 && sheetQuantity > 0);
+    if (row.unscanned) {
+      row.status = "unscanned";
+    }
+    return row;
   });
 
   const totals = rows.reduce(function (output, row) {
@@ -1415,12 +1439,14 @@ function buildAuditSummary_(session, scans, selectedSessions) {
     output.uniqueCount += 1;
     output.issueCount += row.status === "match" ? 0 : 1;
     output.sheetQuantity += row.sheetQuantity;
+    output.unscannedInventoryCount += row.item && row.scannedCount === 0 && row.sheetQuantity > 0 ? 1 : 0;
     return output;
   }, {
     scannedCount: 0,
     uniqueCount: 0,
     issueCount: 0,
-    sheetQuantity: 0
+    sheetQuantity: 0,
+    unscannedInventoryCount: 0
   });
 
   return {
@@ -1467,7 +1493,7 @@ function getGlobalAuditSummary_(sessionIds) {
     ended_at: "",
     ended_by: "",
     status: "global"
-  }, scans, sessions.map(serializeAuditSession_));
+  }, scans, sessions.map(serializeAuditSession_), { includeUnscannedInventory: true });
 }
 
 function getAuditSummary_(payload) {

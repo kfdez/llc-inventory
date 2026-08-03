@@ -364,6 +364,7 @@ function auditStatusLabel(status) {
     "short": "Short",
     "over": "Over",
     "not-in-sheet": "Not in sheet",
+    "unscanned": "Unscanned",
     "collectr-error": "Collectr issue"
   }[status] || "Issue";
 }
@@ -371,6 +372,7 @@ function auditStatusLabel(status) {
 function getAuditReviewRowStatus(row) {
   if (!row.item) return "not-in-sheet";
   if (row.collectrError) return "collectr-error";
+  if (row.unscanned || (Number(row.scannedCount || 0) === 0 && Number(row.sheetQuantity || 0) > 0)) return "unscanned";
   if (row.collectrQuantity === null || row.collectrQuantity === undefined) return row.status;
   if (Number(row.scannedCount || 0) === Number(row.sheetQuantity || 0) &&
       Number(row.scannedCount || 0) === Number(row.collectrQuantity || 0)) {
