@@ -114,6 +114,10 @@ let auditCollectrLoadRunning = false;
 let auditCollectrLoadStopped = false;
 let auditCollectrAbortController = null;
 let auditSummaryLoadVersion = 0;
+let auditCollectrSyncAllRunning = false;
+let auditCollectrSyncAllTotal = 0;
+let auditCollectrSyncAllCompleted = 0;
+let auditCollectrSyncAllFailed = 0;
 auditLog = auditLog.map((entry) => {
   if (entry.status === "syncing") return { ...entry, status: "pending", message: "Queued" };
   if (entry.status === "undoing") return { ...entry, status: "synced", message: "Synced" };
@@ -405,6 +409,20 @@ function recomputeAuditSummaryTotals() {
   };
 }
 
+function isAuditReviewRowSyncable(row) {
+  if (!row || !row.item || !row.collectrLoaded || row.collectrPending || row.collectrSyncing) return false;
+  if (row.collectrSyncSkipped) return false;
+  if (row.collectrQuantity === null || row.collectrQuantity === undefined) return false;
+  const targetQuantity = Number(row.scannedCount || 0);
+  return Number.isInteger(targetQuantity) && targetQuantity >= 0 &&
+    Number(row.collectrQuantity || 0) !== targetQuantity;
+}
+
+function getSyncableAuditReviewRows() {
+  if (!auditSummary || !Array.isArray(auditSummary.rows)) return [];
+  return auditSummary.rows.filter(isAuditReviewRowSyncable);
+}
+
 function renderAuditSummary() {
   if (!auditSummary) {
     elements.auditSummaryPanel.hidden = true;
@@ -416,6 +434,7 @@ function renderAuditSummary() {
   const rows = Array.isArray(auditSummary.rows) ? auditSummary.rows : [];
   const issueRows = rows.filter((row) => row.status !== "match");
   const visibleRows = issueRows.concat(rows.filter((row) => row.status === "match"));
+  const syncableRows = getSyncableAuditReviewRows();
   elements.auditSummaryPanel.hidden = false;
   elements.auditSummaryPanel.innerHTML = `<div class="audit-review-totals">
     <div><span>Unique</span><strong>${Number(totals.uniqueCount || 0)}</strong></div>
@@ -424,6 +443,7 @@ function renderAuditSummary() {
     <div><span>Collectr qty</span><strong>${Number(totals.collectrQuantity || 0)}</strong></div>
   </div>
   ${collectr.pendingCount || auditCollectrLoadRunning || auditCollectrLoadStopped ? `<div class="audit-review-progress"><span>${auditCollectrLoadStopped ? "Collectr check stopped" : auditCollectrLoadRunning ? "Collectr check running on VPS" : "Collectr check"} ${Number(collectr.loadedCount || 0)}/${Number((collectr.loadedCount || 0) + (collectr.pendingCount || 0))} loaded.</span>${auditCollectrLoadRunning ? `<button type="button" class="secondary compact-button" data-audit-action="stop-collectr-load">Stop</button>` : ""}</div>` : ""}
+  ${syncableRows.length || auditCollectrSyncAllRunning ? `<div class="audit-review-progress audit-review-bulk"><span>${auditCollectrSyncAllRunning ? "Sync all running " + auditCollectrSyncAllCompleted + "/" + auditCollectrSyncAllTotal + " synced" + (auditCollectrSyncAllFailed ? " · " + auditCollectrSyncAllFailed + " failed" : "") : syncableRows.length + " Collectr update" + (syncableRows.length === 1 ? "" : "s") + " ready"}</span>${syncableRows.length ? `<button type="button" class="secondary compact-button" data-audit-action="sync-all-collectr" ${auditCollectrSyncAllRunning ? "disabled" : ""}>Sync all</button>` : ""}</div>` : ""}
   <div class="audit-review-list">
     ${visibleRows.length ? visibleRows.map((row) => {
       const item = row.item || {};
@@ -733,6 +753,33 @@ function updateAuditReviewRow(cardId, patch) {
   renderAuditState();
 }
 
+function applyAuditCollectrSyncSuccess(cardId, targetQuantity, data) {
+  const result = data && data.result || {};
+  const collectr = result.collectr || {};
+  const currentQuantity = Number(collectr.currentQuantity ?? targetQuantity);
+  updateAuditReviewRow(cardId, {
+    collectrLoaded: true,
+    collectrPending: false,
+    collectrSyncing: false,
+    collectrError: "",
+    collectrQuantity: currentQuantity,
+    collectrDifference: Number(targetQuantity || 0) - currentQuantity,
+    collectrPortfolioName: result.portfolio && result.portfolio.name || "",
+    collectrProductId: result.product && result.product.id || "",
+    collectrSyncStatus: "Collectr updated to " + currentQuantity
+  });
+}
+
+function applyAuditCollectrSyncError(cardId, message, options = {}) {
+  updateAuditReviewRow(cardId, {
+    collectrPending: false,
+    collectrSyncing: false,
+    collectrSyncSkipped: Boolean(options.skipped),
+    collectrError: message,
+    collectrSyncStatus: ""
+  });
+}
+
 async function loadAuditCollectrSummaryBatches(sessionId, loadVersion = auditSummaryLoadVersion) {
   if (auditCollectrLoadRunning) return;
   const rows = auditSummary && Array.isArray(auditSummary.rows)
@@ -818,6 +865,78 @@ async function adjustCollectrQuantityFromAudit(cardId, targetQuantity) {
       (data.result.collectr && data.result.collectr.verifiedQuantity) + ".");
   }
   return data;
+}
+
+async function syncAuditCollectrReviewRow(cardId, targetQuantity, options = {}) {
+  const maxAttempts = Number(options.maxAttempts || 1);
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    updateAuditReviewRow(cardId, {
+      collectrSyncing: true,
+      collectrSyncSkipped: false,
+      collectrError: "",
+      collectrSyncStatus: "Collectr syncing" + (attempt > 1 ? " (retry " + attempt + "/" + maxAttempts + ")" : "")
+    });
+    try {
+      const data = await adjustCollectrQuantityFromAudit(cardId, targetQuantity);
+      applyAuditCollectrSyncSuccess(cardId, targetQuantity, data);
+      return data;
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxAttempts) {
+        updateAuditReviewRow(cardId, {
+          collectrSyncing: true,
+          collectrError: "",
+          collectrSyncStatus: "Collectr retry queued: " + error.message
+        });
+        await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+        continue;
+      }
+    }
+  }
+  applyAuditCollectrSyncError(cardId, lastError ? lastError.message : "Collectr sync failed.", {
+    skipped: Boolean(options.skippedOnFail)
+  });
+  throw lastError || new Error("Collectr sync failed.");
+}
+
+async function syncAllAuditCollectrRows() {
+  if (auditCollectrSyncAllRunning) return;
+  const rows = getSyncableAuditReviewRows();
+  if (!rows.length) return;
+  if (!window.confirm("Sync " + rows.length + " Collectr update" + (rows.length === 1 ? "" : "s") + "?")) return;
+
+  auditCollectrSyncAllRunning = true;
+  auditCollectrSyncAllTotal = rows.length;
+  auditCollectrSyncAllCompleted = 0;
+  auditCollectrSyncAllFailed = 0;
+  renderAuditSummary();
+  try {
+    for (const row of rows) {
+      const cardId = row.cardId;
+      const targetQuantity = Number(row.scannedCount || 0);
+      try {
+        await syncAuditCollectrReviewRow(cardId, targetQuantity, { maxAttempts: 3, skippedOnFail: true });
+        auditCollectrSyncAllCompleted += 1;
+      } catch (_) {
+        auditCollectrSyncAllFailed += 1;
+      }
+      renderAuditSummary();
+    }
+    if (auditCollectrSyncAllFailed) {
+      setErrorStatus("Collectr sync finished", auditCollectrSyncAllFailed + " Collectr update" + (auditCollectrSyncAllFailed === 1 ? "" : "s") + " failed after 3 attempts.");
+      elements.cameraMessage.textContent = auditCollectrSyncAllCompleted + " synced. " + auditCollectrSyncAllFailed + " failed after 3 attempts.";
+    } else {
+      setStatus("Collectr sync complete", "success");
+      elements.cameraMessage.textContent = auditCollectrSyncAllCompleted + " Collectr update" + (auditCollectrSyncAllCompleted === 1 ? "" : "s") + " synced.";
+    }
+  } finally {
+    auditCollectrSyncAllRunning = false;
+    auditCollectrSyncAllTotal = 0;
+    auditCollectrSyncAllCompleted = 0;
+    auditCollectrSyncAllFailed = 0;
+    renderAuditSummary();
+  }
 }
 
 function buildAuditScanEntry(cardId, sessionId) {
@@ -1354,6 +1473,11 @@ elements.auditSummaryPanel.addEventListener("click", async (event) => {
     elements.cameraMessage.textContent = "Collectr quantity loading stopped for this review.";
     return;
   }
+  const syncAllButton = event.target.closest("button[data-audit-action='sync-all-collectr']");
+  if (syncAllButton) {
+    void syncAllAuditCollectrRows();
+    return;
+  }
   const button = event.target.closest("button[data-audit-action='adjust-collectr']");
   if (!button) return;
   const cardId = button.dataset.cardId;
@@ -1364,41 +1488,10 @@ elements.auditSummaryPanel.addEventListener("click", async (event) => {
   button.disabled = true;
   button.textContent = "Saving";
   try {
-    updateAuditReviewRow(cardId, {
-      collectrSyncing: true,
-      collectrError: "",
-      collectrSyncStatus: "Collectr syncing"
-    });
-    const data = await adjustCollectrQuantityFromAudit(cardId, targetQuantity);
-    if (!data) {
-      updateAuditReviewRow(cardId, {
-        collectrSyncing: false,
-        collectrSyncStatus: ""
-      });
-      return;
-    }
-    const result = data.result || {};
-    const collectr = result.collectr || {};
-    updateAuditReviewRow(cardId, {
-      collectrLoaded: true,
-      collectrPending: false,
-      collectrSyncing: false,
-      collectrError: "",
-      collectrQuantity: Number(collectr.currentQuantity ?? targetQuantity),
-      collectrDifference: Number(targetQuantity || 0) - Number(collectr.currentQuantity ?? targetQuantity),
-      collectrPortfolioName: result.portfolio && result.portfolio.name || "",
-      collectrProductId: result.product && result.product.id || "",
-      collectrSyncStatus: "Collectr updated to " + Number(collectr.currentQuantity ?? targetQuantity)
-    });
+    await syncAuditCollectrReviewRow(cardId, targetQuantity, { maxAttempts: 1 });
     setStatus("Collectr updated", "success");
     elements.cameraMessage.textContent = "Collectr quantity updated for " + cardId + ".";
   } catch (error) {
-    updateAuditReviewRow(cardId, {
-      collectrPending: false,
-      collectrSyncing: false,
-      collectrError: error.message,
-      collectrSyncStatus: ""
-    });
     setErrorStatus("Collectr error", error.message);
     elements.cameraMessage.textContent = error.message;
     button.disabled = false;
