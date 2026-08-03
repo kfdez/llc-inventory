@@ -396,6 +396,14 @@ function collectrPostJson(env, path, query = {}, body = {}) {
   return collectrRequestJson(env, path, query, { method: "POST", body });
 }
 
+function humanizeCollectrError(error) {
+  const message = String(error && error.message || error || "");
+  if (/quantity in purchase price exceeds quantity in product owned/i.test(message)) {
+    return "Collectr rejected this update because this owned item has price-paid entries for more copies than the target quantity. Lower or remove the price-paid entries in Collectr first, or set the quantity to at least the price-paid quantity.";
+  }
+  return message || "Collectr request failed.";
+}
+
 async function fetchCollectrPortfolios(env) {
   const now = Date.now();
   const config = requireCollectrConfig(env);
@@ -638,12 +646,18 @@ async function setCollectrItemQuantity(env, item, targetQuantity) {
     gradeId: resolved.product.gradeId || item.collectrGradeId || "",
     quantity: targetQuantity
   };
-  await collectrPostJson(
-    env,
-    "/collections/" + encodeURIComponent(requireCollectrConfig(env).accountId) + "/products/" + encodeURIComponent(resolved.product.id),
-    { collectionId: resolved.portfolio.id },
-    body
-  );
+  try {
+    await collectrPostJson(
+      env,
+      "/collections/" + encodeURIComponent(requireCollectrConfig(env).accountId) + "/products/" + encodeURIComponent(resolved.product.id),
+      { collectionId: resolved.portfolio.id },
+      body
+    );
+  } catch (error) {
+    const friendly = new Error(humanizeCollectrError(error));
+    friendly.cause = error;
+    throw friendly;
+  }
   collectrPortfolioCache = null;
   const refreshedRows = await fetchCollectrProductDetailLines(env, resolved.portfolio.id, resolved.product.id);
   const refreshedMatch = refreshedRows.find((product) =>

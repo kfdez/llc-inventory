@@ -126,9 +126,11 @@ function startCollectrProxyServer({ config, logger, store }) {
       return;
     }
 
+    let body = {};
+    let method = "GET";
     try {
-      const body = await readJsonBody(request);
-      const method = String(body.method || "GET").trim().toUpperCase();
+      body = await readJsonBody(request);
+      method = String(body.method || "GET").trim().toUpperCase();
       if (["GET", "POST"].indexOf(method) === -1) {
         throw new Error("Collectr method is not allowed.");
       }
@@ -148,8 +150,21 @@ function startCollectrProxyServer({ config, logger, store }) {
       }
       sendJson(response, 200, { ok: true, data });
     } catch (error) {
-      logger.warn({ err: error }, "Collectr proxy request failed.");
-      sendJson(response, 502, { ok: false, error: error.message });
+      logger.warn({
+        err: error,
+        method,
+        path: body.path,
+        collectionId: body.query && body.query.collectionId,
+        quantity: body.body && body.body.quantity,
+        subType: body.body && body.body.subType,
+        gradeId: body.body && body.body.gradeId,
+        upstreamStatus: error.status
+      }, "Collectr proxy request failed.");
+      sendJson(response, error.status || 502, {
+        ok: false,
+        error: error.message,
+        upstreamStatus: error.status
+      });
     }
   });
 

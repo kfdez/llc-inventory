@@ -52,7 +52,10 @@ async function fetchCollectrJson(config, path, query = {}, options = {}) {
       );
     }
     if (!response.ok) {
-      throw new Error(data.error || data.message || "Collectr request failed with HTTP " + response.status + ".");
+      const error = new Error(data.error || data.message || "Collectr request failed with HTTP " + response.status + ".");
+      error.status = response.status;
+      error.response = data;
+      throw error;
     }
     return data;
   } finally {
