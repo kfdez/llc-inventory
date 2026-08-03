@@ -720,6 +720,14 @@ summary {
   border-color: #f1d284;
   background: var(--warn-soft);
 }
+.audit-review-row.error {
+  border-color: #f0b8c3;
+  background: var(--bad-soft);
+}
+.audit-review-row.syncing {
+  border-color: #b8c7f0;
+  background: #eef3ff;
+}
 .audit-review-row strong, .audit-review-row b {
   display: block;
   overflow: hidden;

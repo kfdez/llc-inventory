@@ -363,6 +363,21 @@ function auditStatusLabel(status) {
   }[status] || "Issue";
 }
 
+function getAuditReviewRowStatus(row) {
+  if (!row.item) return "not-in-sheet";
+  if (row.collectrError) return "collectr-error";
+  if (row.collectrQuantity === null || row.collectrQuantity === undefined) return row.status;
+  if (Number(row.scannedCount || 0) === Number(row.sheetQuantity || 0) &&
+      Number(row.scannedCount || 0) === Number(row.collectrQuantity || 0)) {
+    return "match";
+  }
+  if (Number(row.scannedCount || 0) < Number(row.sheetQuantity || 0) ||
+      Number(row.scannedCount || 0) < Number(row.collectrQuantity || 0)) {
+    return "short";
+  }
+  return "over";
+}
+
 function recomputeAuditSummaryTotals() {
   if (!auditSummary || !Array.isArray(auditSummary.rows)) return;
   const rows = auditSummary.rows;
@@ -416,14 +431,24 @@ function renderAuditSummary() {
       const meta = [item.portfolioName || row.collectrPortfolioName, item.setName, item.cardNumber].filter(Boolean).join(" | ");
       const collectrText = !row.item
         ? "Collectr skipped"
-        : row.collectrError
+        : row.collectrSyncing
+          ? "Collectr syncing"
+          : row.collectrError
           ? "Collectr: " + row.collectrError
+          : row.collectrSyncStatus
+            ? row.collectrSyncStatus
           : row.collectrLoaded
             ? "Collectr " + (row.collectrQuantity ?? "-")
             : "Collectr pending";
-      const canAdjustCollectr = row.item && row.collectrLoaded && !row.collectrError && row.collectrQuantity !== null &&
-        Number(row.collectrQuantity || 0) !== Number(row.scannedCount || 0);
-      return `<div class="audit-review-row ${row.status === "match" ? "" : "issue"}">
+      const canAdjustCollectr = row.item && row.collectrLoaded && row.collectrQuantity !== null &&
+        Number(row.collectrQuantity || 0) !== Number(row.scannedCount || 0) && !row.collectrSyncing;
+      const rowClass = [
+        "audit-review-row",
+        row.status === "match" ? "" : "issue",
+        row.collectrError ? "error" : "",
+        row.collectrSyncing ? "syncing" : ""
+      ].filter(Boolean).join(" ");
+      return `<div class="${rowClass}" data-card-id="${escapeHtml(row.cardId)}">
         <div><strong>${escapeHtml(title)}</strong><span>${escapeHtml(meta || row.cardId)}</span></div>
         <div class="audit-review-counts"><span>Scanned ${Number(row.scannedCount || 0)}</span><span>Sheet ${Number(row.sheetQuantity || 0)}</span><span>${escapeHtml(collectrText)}</span></div>
         <div class="audit-review-actions"><b>${escapeHtml(auditStatusLabel(row.status))}</b>${canAdjustCollectr ? `<button type="button" class="secondary compact-button" data-audit-action="adjust-collectr" data-card-id="${escapeHtml(row.cardId)}" data-target-quantity="${Number(row.scannedCount || 0)}">Set Collectr</button>` : ""}</div>
@@ -694,6 +719,20 @@ function markAuditCollectrRowsFailed(cardIds, message) {
   renderAuditState();
 }
 
+function updateAuditReviewRow(cardId, patch) {
+  if (!auditSummary || !Array.isArray(auditSummary.rows)) return;
+  const key = String(cardId || "").toUpperCase();
+  auditSummary.rows = auditSummary.rows.map((row) => {
+    if (String(row.cardId || "").toUpperCase() !== key) return row;
+    const updated = { ...row, ...patch };
+    updated.status = getAuditReviewRowStatus(updated);
+    return updated;
+  });
+  recomputeAuditSummaryTotals();
+  saveAuditState();
+  renderAuditState();
+}
+
 async function loadAuditCollectrSummaryBatches(sessionId, loadVersion = auditSummaryLoadVersion) {
   if (auditCollectrLoadRunning) return;
   const rows = auditSummary && Array.isArray(auditSummary.rows)
@@ -763,9 +802,6 @@ async function adjustCollectrQuantityFromAudit(cardId, targetQuantity) {
   if (!Number.isInteger(quantity) || quantity < 0) {
     throw new Error("Target quantity must be a non-negative integer.");
   }
-  if (!window.confirm("Set Collectr quantity for " + cardId + " to " + quantity + "?")) {
-    return;
-  }
   const response = await fetch("/api/collectr/quantity", {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-App-Pin": pin },
@@ -781,7 +817,7 @@ async function adjustCollectrQuantityFromAudit(cardId, targetQuantity) {
     throw new Error("Collectr accepted the update, but API verification returned quantity " +
       (data.result.collectr && data.result.collectr.verifiedQuantity) + ".");
   }
-  await loadAuditSummary();
+  return data;
 }
 
 function buildAuditScanEntry(cardId, sessionId) {
@@ -1320,13 +1356,49 @@ elements.auditSummaryPanel.addEventListener("click", async (event) => {
   }
   const button = event.target.closest("button[data-audit-action='adjust-collectr']");
   if (!button) return;
+  const cardId = button.dataset.cardId;
+  const targetQuantity = Number(button.dataset.targetQuantity);
+  if (!window.confirm("Set Collectr quantity for " + cardId + " to " + targetQuantity + "?")) {
+    return;
+  }
   button.disabled = true;
   button.textContent = "Saving";
   try {
-    await adjustCollectrQuantityFromAudit(button.dataset.cardId, button.dataset.targetQuantity);
+    updateAuditReviewRow(cardId, {
+      collectrSyncing: true,
+      collectrError: "",
+      collectrSyncStatus: "Collectr syncing"
+    });
+    const data = await adjustCollectrQuantityFromAudit(cardId, targetQuantity);
+    if (!data) {
+      updateAuditReviewRow(cardId, {
+        collectrSyncing: false,
+        collectrSyncStatus: ""
+      });
+      return;
+    }
+    const result = data.result || {};
+    const collectr = result.collectr || {};
+    updateAuditReviewRow(cardId, {
+      collectrLoaded: true,
+      collectrPending: false,
+      collectrSyncing: false,
+      collectrError: "",
+      collectrQuantity: Number(collectr.currentQuantity ?? targetQuantity),
+      collectrDifference: Number(targetQuantity || 0) - Number(collectr.currentQuantity ?? targetQuantity),
+      collectrPortfolioName: result.portfolio && result.portfolio.name || "",
+      collectrProductId: result.product && result.product.id || "",
+      collectrSyncStatus: "Collectr updated to " + Number(collectr.currentQuantity ?? targetQuantity)
+    });
     setStatus("Collectr updated", "success");
-    elements.cameraMessage.textContent = "Collectr quantity updated and review refreshed.";
+    elements.cameraMessage.textContent = "Collectr quantity updated for " + cardId + ".";
   } catch (error) {
+    updateAuditReviewRow(cardId, {
+      collectrPending: false,
+      collectrSyncing: false,
+      collectrError: error.message,
+      collectrSyncStatus: ""
+    });
     setErrorStatus("Collectr error", error.message);
     elements.cameraMessage.textContent = error.message;
     button.disabled = false;
