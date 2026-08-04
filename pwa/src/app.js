@@ -120,6 +120,7 @@ let auditCollectrSyncAllTotal = 0;
 let auditCollectrSyncAllCompleted = 0;
 let auditCollectrSyncAllFailed = 0;
 let auditCaptureFeedbackTimer = 0;
+const auditLookupRecordKeys = new Set();
 auditLog = auditLog.map((entry) => {
   if (entry.status === "syncing") return { ...entry, status: "pending", message: "Queued" };
   if (entry.status === "undoing") return { ...entry, status: "synced", message: "Synced" };
@@ -156,8 +157,20 @@ function clearStatusError() {
   lastStatusError = "";
 }
 
-function authenticatedFetch(url) {
-  return fetch(url, { headers: { "X-App-Pin": pin } });
+function authenticatedFetch(url, options = {}) {
+  const timeoutMs = Number(options.timeoutMs || 0);
+  const fetchOptions = { ...options };
+  delete fetchOptions.timeoutMs;
+  const headers = { ...(fetchOptions.headers || {}), "X-App-Pin": pin };
+  if (!timeoutMs) {
+    return fetch(url, { ...fetchOptions, headers });
+  }
+
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...fetchOptions, headers, signal: controller.signal }).finally(() => {
+    window.clearTimeout(timeoutId);
+  });
 }
 
 function compactDuration(ms) {
@@ -218,6 +231,7 @@ async function unlock(candidatePin) {
   elements.scannerScreen.hidden = false;
   elements.pinMessage.textContent = "";
   await resumeAuditSessionFromServer();
+  recoverCheckingAuditScans();
   if (auditLog.some((entry) => entry.status === "pending" || entry.status === "syncing")) {
     void drainAuditSaveQueue();
   }
@@ -1069,8 +1083,10 @@ function promptForMissingAuditNotes(cardId) {
 }
 
 async function prepareAuditScanEntry(recordKey, cardId) {
+  if (auditLookupRecordKeys.has(recordKey)) return;
+  auditLookupRecordKeys.add(recordKey);
   try {
-    const response = await authenticatedFetch("/api/lookup?cardId=" + encodeURIComponent(cardId));
+    const response = await authenticatedFetch("/api/lookup?cardId=" + encodeURIComponent(cardId), { timeoutMs: 12000 });
     const data = await response.json();
     if (response.status === 401) {
       lock();
@@ -1104,7 +1120,19 @@ async function prepareAuditScanEntry(recordKey, cardId) {
       message: "Queued; lookup details failed: " + error.message
     });
     void drainAuditSaveQueue();
+  } finally {
+    auditLookupRecordKeys.delete(recordKey);
   }
+}
+
+function recoverCheckingAuditScans() {
+  const checkingEntries = auditLog.filter((entry) => {
+    return entry && entry.status === "checking" && entry.recordKey && entry.cardId;
+  });
+  checkingEntries.forEach((entry) => {
+    void prepareAuditScanEntry(entry.recordKey, entry.cardId);
+  });
+  return checkingEntries.length;
 }
 
 async function sendAuditScan(entry) {
