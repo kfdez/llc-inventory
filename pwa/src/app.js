@@ -119,6 +119,7 @@ let auditCollectrSyncAllRunning = false;
 let auditCollectrSyncAllTotal = 0;
 let auditCollectrSyncAllCompleted = 0;
 let auditCollectrSyncAllFailed = 0;
+let auditCaptureFeedbackTimer = 0;
 auditLog = auditLog.map((entry) => {
   if (entry.status === "syncing") return { ...entry, status: "pending", message: "Queued" };
   if (entry.status === "undoing") return { ...entry, status: "synced", message: "Synced" };
@@ -606,15 +607,34 @@ function setPendingAuditQr(rawValue) {
   pendingAuditCardId = extractCardId(pendingAuditRawValue);
   elements.captureAuditQrButton.disabled = !auditSession || !pendingAuditCardId;
   if (pendingAuditCardId) {
-    elements.captureAuditQrButton.textContent = "Capture QR";
+    if (!auditCaptureFeedbackTimer) {
+      elements.captureAuditQrButton.classList.remove("captured");
+      elements.captureAuditQrButton.textContent = "Capture QR";
+    }
     elements.decodedValue.textContent = pendingAuditRawValue;
     elements.decodedPanel.hidden = false;
     clearStatusError();
     setStatus("QR ready", "success");
     elements.cameraMessage.textContent = "QR detected. Tap Capture QR to add it to the audit queue.";
   } else {
+    elements.captureAuditQrButton.classList.remove("captured");
     elements.captureAuditQrButton.textContent = "Capture QR";
   }
+}
+
+function showAuditCaptureFeedback() {
+  if (auditCaptureFeedbackTimer) {
+    window.clearTimeout(auditCaptureFeedbackTimer);
+  }
+  elements.captureAuditQrButton.classList.add("captured");
+  elements.captureAuditQrButton.textContent = "Captured";
+  elements.captureAuditQrButton.disabled = true;
+  auditCaptureFeedbackTimer = window.setTimeout(() => {
+    auditCaptureFeedbackTimer = 0;
+    elements.captureAuditQrButton.classList.remove("captured");
+    elements.captureAuditQrButton.textContent = "Capture QR";
+    elements.captureAuditQrButton.disabled = !auditSession || !pendingAuditCardId;
+  }, 900);
 }
 
 async function startAuditSession(sessionName) {
@@ -1464,8 +1484,7 @@ elements.captureAuditQrButton.addEventListener("click", () => {
     pendingAuditRawValue = "";
     pendingAuditCardId = "";
     lastCode = "";
-    elements.captureAuditQrButton.disabled = true;
-    elements.captureAuditQrButton.textContent = "Capture QR";
+    showAuditCaptureFeedback();
   } catch (error) {
     setErrorStatus("Audit error", error.message);
     elements.cameraMessage.textContent = error.message;

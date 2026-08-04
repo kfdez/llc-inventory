@@ -320,6 +320,12 @@ input {
   text-transform: none;
 }
 .capture-audit-button { width: 100%; margin: 0 0 8px; }
+.capture-audit-button.captured {
+  border-color: #0f7656;
+  background: var(--good);
+  color: white;
+  opacity: 1;
+}
 
 label {
   display: block;
