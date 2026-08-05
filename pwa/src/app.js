@@ -41,6 +41,12 @@ const elements = {
   auditStatusText: document.querySelector("#auditStatusText"),
   auditSummaryPanel: document.querySelector("#auditSummaryPanel"),
   auditLog: document.querySelector("#auditLog"),
+  missingNotesBackdrop: document.querySelector("#missingNotesBackdrop"),
+  missingNotesModal: document.querySelector("#missingNotesModal"),
+  missingNotesForm: document.querySelector("#missingNotesForm"),
+  missingNotesCardId: document.querySelector("#missingNotesCardId"),
+  missingNotesInput: document.querySelector("#missingNotesInput"),
+  missingNotesSkipButton: document.querySelector("#missingNotesSkipButton"),
   cacheStatusText: document.querySelector("#cacheStatusText"),
   decodedPanel: document.querySelector("#decodedPanel"),
   decodedValue: document.querySelector("#decodedValue"),
@@ -120,6 +126,7 @@ let auditCollectrSyncAllTotal = 0;
 let auditCollectrSyncAllCompleted = 0;
 let auditCollectrSyncAllFailed = 0;
 let auditCaptureFeedbackTimer = 0;
+let missingNotesRecordKey = "";
 const auditLookupRecordKeys = new Set();
 auditLog = auditLog.map((entry) => {
   if (entry.status === "syncing") return { ...entry, status: "pending", message: "Queued" };
@@ -528,7 +535,7 @@ function renderAuditState() {
           ${canCancel ? `<button type="button" class="secondary compact-button" data-audit-action="cancel" data-record-key="${escapeHtml(entry.recordKey)}">Cancel</button>` : ""}
           ${canUndo ? `<button type="button" class="secondary compact-button" data-audit-action="undo" data-record-key="${escapeHtml(entry.recordKey)}">Undo</button>` : ""}
           ${canRetry ? `<button type="button" class="secondary compact-button" data-audit-action="retry" data-record-key="${escapeHtml(entry.recordKey)}">Retry</button>` : ""}
-          ${needsNotes ? `<button type="button" class="secondary compact-button" data-audit-action="queue-missing" data-record-key="${escapeHtml(entry.recordKey)}">Queue</button>` : ""}
+          ${needsNotes ? `<button type="button" class="secondary compact-button" data-audit-action="notes" data-record-key="${escapeHtml(entry.recordKey)}">Notes</button><button type="button" class="secondary compact-button" data-audit-action="queue-missing" data-record-key="${escapeHtml(entry.recordKey)}">Queue</button>` : ""}
         </div>
         ${needsNotes ? `<form class="audit-entry-notes" data-record-key="${escapeHtml(entry.recordKey)}"><input name="notes" value="${escapeHtml(entry.notes || "")}" placeholder="Add notes for this missing ID"><button type="submit" class="secondary compact-button">Save notes</button></form>` : ""}
       </div>`;
@@ -1096,6 +1103,7 @@ async function prepareAuditScanEntry(recordKey, cardId) {
         status: "needs_notes",
         message: "Missing ID; add notes or queue for review"
       });
+      openMissingNotesModal(recordKey);
       return;
     }
     updateAuditLogEntry(recordKey, {
@@ -1127,6 +1135,23 @@ function recoverCheckingAuditScans() {
   return checkingEntries.length;
 }
 
+function openMissingNotesModal(recordKey) {
+  const entry = auditLog.find((candidate) => candidate.recordKey === recordKey);
+  if (!entry || entry.status !== "needs_notes") return;
+  missingNotesRecordKey = recordKey;
+  elements.missingNotesCardId.textContent = entry.cardId || "Unknown card ID";
+  elements.missingNotesInput.value = entry.notes || "";
+  elements.missingNotesBackdrop.hidden = false;
+  elements.missingNotesModal.hidden = false;
+  window.setTimeout(() => elements.missingNotesInput.focus(), 0);
+}
+
+function closeMissingNotesModal() {
+  missingNotesRecordKey = "";
+  elements.missingNotesBackdrop.hidden = true;
+  elements.missingNotesModal.hidden = true;
+}
+
 function queueMissingAuditScan(recordKey, notes) {
   const entry = auditLog.find((candidate) => candidate.recordKey === recordKey);
   if (!entry || entry.status !== "needs_notes") return;
@@ -1136,6 +1161,9 @@ function queueMissingAuditScan(recordKey, notes) {
     status: "pending",
     message: normalizedNotes ? "Missing ID noted; queued for review" : "Missing ID queued for review"
   });
+  if (missingNotesRecordKey === recordKey) {
+    closeMissingNotesModal();
+  }
   void drainAuditSaveQueue();
 }
 
@@ -1589,6 +1617,8 @@ elements.auditLog.addEventListener("click", (event) => {
   } else if (button.dataset.auditAction === "retry") {
     updateAuditLogEntry(recordKey, { status: "pending", kind: "", attempts: 0, message: "Queued" });
     void drainAuditSaveQueue();
+  } else if (button.dataset.auditAction === "notes") {
+    openMissingNotesModal(recordKey);
   } else if (button.dataset.auditAction === "queue-missing") {
     queueMissingAuditScan(recordKey, "");
   }
@@ -1599,6 +1629,19 @@ elements.auditLog.addEventListener("submit", (event) => {
   event.preventDefault();
   const notesInput = form.querySelector("input[name='notes']");
   queueMissingAuditScan(form.dataset.recordKey, notesInput ? notesInput.value : "");
+});
+elements.missingNotesForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  queueMissingAuditScan(missingNotesRecordKey, elements.missingNotesInput.value);
+});
+elements.missingNotesSkipButton.addEventListener("click", () => {
+  queueMissingAuditScan(missingNotesRecordKey, "");
+});
+elements.missingNotesBackdrop.addEventListener("click", closeMissingNotesModal);
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !elements.missingNotesModal.hidden) {
+    closeMissingNotesModal();
+  }
 });
 elements.auditSummaryPanel.addEventListener("submit", async (event) => {
   const form = event.target.closest("#globalAuditSessionForm");

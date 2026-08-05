@@ -151,6 +151,55 @@ h2 {
   background: rgba(8, 24, 33, .28);
   backdrop-filter: blur(2px);
 }
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(8, 24, 33, .32);
+  backdrop-filter: blur(2px);
+}
+.notes-modal {
+  position: fixed;
+  z-index: 41;
+  inset: auto 14px calc(18px + env(safe-area-inset-bottom));
+  max-width: 460px;
+  margin: 0 auto;
+  padding: 0;
+}
+.notes-modal form {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  box-shadow: 0 20px 60px rgba(25, 55, 72, .22);
+}
+.notes-modal h2 {
+  margin: 2px 0 4px;
+}
+.notes-card-id {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .82rem;
+  overflow-wrap: anywhere;
+}
+.notes-modal textarea {
+  width: 100%;
+  min-height: 112px;
+  resize: vertical;
+  border: 1px solid #84bdca;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.notes-modal-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
 .mode-drawer {
   position: fixed;
   z-index: 31;

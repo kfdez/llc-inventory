@@ -122,6 +122,20 @@
       </article>
     </section>
   </main>
+  <div id="missingNotesBackdrop" class="modal-backdrop" hidden></div>
+  <section id="missingNotesModal" class="notes-modal" role="dialog" aria-modal="true" aria-labelledby="missingNotesTitle" hidden>
+    <form id="missingNotesForm">
+      <p class="eyebrow">Missing card ID</p>
+      <h2 id="missingNotesTitle">Add review notes</h2>
+      <p id="missingNotesCardId" class="notes-card-id"></p>
+      <label for="missingNotesInput">Notes</label>
+      <textarea id="missingNotesInput" rows="4" placeholder="Enter card details, location, or anything useful for manual review."></textarea>
+      <div class="notes-modal-actions">
+        <button id="missingNotesSkipButton" class="secondary" type="button">Queue without notes</button>
+        <button type="submit">Save notes</button>
+      </div>
+    </form>
+  </section>
   <canvas id="scanCanvas" hidden></canvas>
   <script type="module" src="/src/app.js"></script>
 </body>
