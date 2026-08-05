@@ -200,6 +200,28 @@ h2 {
   gap: 8px;
   margin-top: 10px;
 }
+.global-audit-modal {
+  position: fixed;
+  z-index: 41;
+  inset: calc(24px + env(safe-area-inset-top)) 14px calc(24px + env(safe-area-inset-bottom));
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+}
+.global-audit-modal[hidden] {
+  display: none;
+}
+#globalAuditModalContent {
+  width: min(720px, 100%);
+  min-height: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  box-shadow: 0 20px 60px rgba(25, 55, 72, .22);
+  display: flex;
+  flex-direction: column;
+}
 .mode-drawer {
   position: fixed;
   z-index: 31;
@@ -781,14 +803,19 @@ summary {
 .audit-session-picker {
   display: flex;
   flex-direction: column;
+  flex: 1;
   min-height: 0;
   gap: 10px;
 }
 .audit-picker-heading {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+}
+.audit-picker-toolbar {
+  display: flex;
+  justify-content: flex-end;
 }
 .audit-picker-heading strong, .audit-session-option strong {
   display: block;
@@ -801,6 +828,8 @@ summary {
 .audit-session-list {
   display: grid;
   gap: 6px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-right: 4px;

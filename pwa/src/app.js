@@ -47,6 +47,9 @@ const elements = {
   missingNotesCardId: document.querySelector("#missingNotesCardId"),
   missingNotesInput: document.querySelector("#missingNotesInput"),
   missingNotesSkipButton: document.querySelector("#missingNotesSkipButton"),
+  globalAuditBackdrop: document.querySelector("#globalAuditBackdrop"),
+  globalAuditModal: document.querySelector("#globalAuditModal"),
+  globalAuditModalContent: document.querySelector("#globalAuditModalContent"),
   cacheStatusText: document.querySelector("#cacheStatusText"),
   decodedPanel: document.querySelector("#decodedPanel"),
   decodedValue: document.querySelector("#decodedValue"),
@@ -737,8 +740,7 @@ async function loadAuditSummary(sessionId) {
 }
 
 async function loadGlobalAuditSessions() {
-  elements.auditSummaryPanel.hidden = false;
-  elements.auditSummaryPanel.innerHTML = `<div class="audit-review-empty">Loading audit sessions...</div>`;
+  openGlobalAuditModal(`<div class="audit-review-empty">Loading audit sessions...</div>`);
   const response = await authenticatedFetch("/api/audit/sessions?limit=50");
   const data = await response.json();
   if (response.status === 401) {
@@ -749,12 +751,26 @@ async function loadGlobalAuditSessions() {
   renderGlobalAuditSessionPicker(Array.isArray(data.sessions) ? data.sessions : []);
 }
 
+function openGlobalAuditModal(content) {
+  elements.globalAuditModalContent.innerHTML = content || "";
+  elements.globalAuditBackdrop.hidden = false;
+  elements.globalAuditModal.hidden = false;
+}
+
+function closeGlobalAuditModal() {
+  elements.globalAuditBackdrop.hidden = true;
+  elements.globalAuditModal.hidden = true;
+  elements.globalAuditModalContent.innerHTML = "";
+}
+
 function renderGlobalAuditSessionPicker(sessions) {
-  elements.auditSummaryPanel.hidden = false;
   const rows = sessions.filter((session) => Number(session.activeScanCount || 0) > 0);
-  elements.auditSummaryPanel.innerHTML = `<form class="audit-session-picker" id="globalAuditSessionForm">
+  openGlobalAuditModal(`<form class="audit-session-picker" id="globalAuditSessionForm">
     <div class="audit-picker-heading">
-      <div><strong>Global audit review</strong><span>Select every binder or box that should count toward total inventory.</span></div>
+      <div><strong id="globalAuditTitle">Global audit review</strong><span>Select every binder or box that should count toward total inventory.</span></div>
+      <button type="button" class="secondary compact-button" data-global-audit-action="close">Close</button>
+    </div>
+    <div class="audit-picker-toolbar">
       <button type="submit" class="secondary compact-button" ${rows.length ? "" : "disabled"}>Review selected</button>
     </div>
     <div class="audit-session-list">
@@ -767,7 +783,7 @@ function renderGlobalAuditSessionPicker(sessions) {
         </label>`;
       }).join("") : `<div class="audit-review-empty">No audit sessions with scans found.</div>`}
     </div>
-  </form>`;
+  </form>`);
 }
 
 async function loadGlobalAuditSummary(sessionIds) {
@@ -1669,17 +1685,21 @@ elements.missingNotesSkipButton.addEventListener("click", () => {
   queueMissingAuditScan(missingNotesRecordKey, "");
 });
 elements.missingNotesBackdrop.addEventListener("click", closeMissingNotesModal);
+elements.globalAuditBackdrop.addEventListener("click", closeGlobalAuditModal);
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !elements.missingNotesModal.hidden) {
     closeMissingNotesModal();
+  } else if (event.key === "Escape" && !elements.globalAuditModal.hidden) {
+    closeGlobalAuditModal();
   }
 });
-elements.auditSummaryPanel.addEventListener("submit", async (event) => {
+elements.globalAuditModal.addEventListener("submit", async (event) => {
   const form = event.target.closest("#globalAuditSessionForm");
   if (!form) return;
   event.preventDefault();
   const sessionIds = [...form.querySelectorAll("input[name='sessionId']:checked")].map((input) => input.value);
   elements.auditSessionText.textContent = "Loading global audit review...";
+  closeGlobalAuditModal();
   try {
     await loadGlobalAuditSummary(sessionIds);
     setStatus("Global review ready", "success");
@@ -1688,6 +1708,10 @@ elements.auditSummaryPanel.addEventListener("submit", async (event) => {
     setErrorStatus("Audit error", error.message);
     elements.auditSessionText.textContent = error.message;
   }
+});
+elements.globalAuditModal.addEventListener("click", (event) => {
+  const closeButton = event.target.closest("button[data-global-audit-action='close']");
+  if (closeButton) closeGlobalAuditModal();
 });
 elements.auditSummaryPanel.addEventListener("click", async (event) => {
   const stopButton = event.target.closest("button[data-audit-action='stop-collectr-load']");
