@@ -9,6 +9,7 @@ const INVENTORY_SNAPSHOT_STALE_TTL_MS = 2 * 60 * 60 * 1000;
 const COLLECTR_API_BASE_URL = "https://api-v2.getcollectr.com";
 const COLLECTR_PORTFOLIO_CACHE_TTL_MS = 10 * 60 * 1000;
 const AUDIT_COLLECTR_BATCH_SIZE = 6;
+const GLOBAL_AUDIT_STATUS_CONCURRENCY = 5;
 const lookupCache = new Map();
 let inventorySnapshot = null;
 let inventorySnapshotPromise = null;
@@ -1201,19 +1202,7 @@ function getSheetAuditSummaryStatus(scannedCount, sheetQuantity, item) {
   return Number(scannedCount || 0) > Number(sheetQuantity || 0) ? "over" : "short";
 }
 
-async function getFastAuditSummary(env, sessionId) {
-  let statusData;
-  try {
-    statusData = await appsScriptGet(env, "audit/status", { threadId: "pwa-audit", sessionId });
-  } catch (error) {
-    statusData = await appsScriptGet(env, "audit/status", { threadId: "pwa-audit" });
-  }
-  const statusResult = statusData.result || {};
-  const session = statusResult.session || null;
-  if (!session || String(session.session_id || "").trim() !== sessionId) return null;
-
-  await ensureInventorySnapshot(env, { allowStale: true });
-  const scans = Array.isArray(statusResult.scans) ? statusResult.scans : [];
+function buildSheetAuditSummaryFromScans({ session, scans, selectedSessions = null, includeUnscannedInventory = false }) {
   const activeScans = scans.filter((scan) => scan && scan.cardId && String(scan.status || "").toLowerCase() !== "undone");
   const grouped = new Map();
 
@@ -1230,11 +1219,25 @@ async function getFastAuditSummary(env, sessionId) {
     grouped.set(key, group);
   }
 
+  if (includeUnscannedInventory && inventorySnapshot) {
+    for (const [key, item] of inventorySnapshot.itemsById.entries()) {
+      const sheetQuantity = Number(item && item.quantity || 0);
+      if (sheetQuantity <= 0 || grouped.has(key)) continue;
+      grouped.set(key, {
+        cardId: item.cardId || key,
+        scannedCount: 0,
+        sheetQuantity,
+        recordKeys: [],
+        item: cloneLookupData(item)
+      });
+    }
+  }
+
   const rows = [...grouped.keys()].sort().map((key) => {
     const group = grouped.get(key);
-    const item = getInventorySnapshotLookup(group.cardId, { allowStale: true })?.item || null;
-    const sheetQuantity = item ? Number(item.quantity || 0) : 0;
-    return {
+    const item = group.item || getInventorySnapshotLookup(group.cardId, { allowStale: true })?.item || null;
+    const sheetQuantity = group.sheetQuantity !== undefined ? group.sheetQuantity : item ? Number(item.quantity || 0) : 0;
+    const row = {
       cardId: group.cardId,
       scannedCount: group.scannedCount,
       sheetQuantity,
@@ -1243,6 +1246,9 @@ async function getFastAuditSummary(env, sessionId) {
       item,
       recordKeys: group.recordKeys
     };
+    row.unscanned = !!(item && group.scannedCount === 0 && sheetQuantity > 0);
+    if (row.unscanned) row.status = "unscanned";
+    return row;
   });
 
   const totals = rows.reduce((output, row) => {
@@ -1250,16 +1256,19 @@ async function getFastAuditSummary(env, sessionId) {
     output.uniqueCount += 1;
     output.issueCount += row.status === "match" ? 0 : 1;
     output.sheetQuantity += Number(row.sheetQuantity || 0);
+    output.unscannedInventoryCount += row.unscanned ? 1 : 0;
     return output;
   }, {
     scannedCount: 0,
     uniqueCount: 0,
     issueCount: 0,
-    sheetQuantity: 0
+    sheetQuantity: 0,
+    unscannedInventoryCount: 0
   });
 
   return {
     session,
+    selectedSessions: selectedSessions || [session],
     generatedAt: new Date().toISOString(),
     scanCount: scans.length,
     activeScanCount: activeScans.length,
@@ -1267,6 +1276,66 @@ async function getFastAuditSummary(env, sessionId) {
     totals,
     rows
   };
+}
+
+async function getAuditStatusForSession(env, sessionId) {
+  let statusData;
+  try {
+    statusData = await appsScriptGet(env, "audit/status", { threadId: "pwa-audit", sessionId });
+  } catch (error) {
+    statusData = await appsScriptGet(env, "audit/status", { threadId: "pwa-audit" });
+  }
+  const statusResult = statusData.result || {};
+  const session = statusResult.session || null;
+  if (!session || String(session.session_id || "").trim() !== sessionId) return null;
+  return {
+    session,
+    scans: Array.isArray(statusResult.scans) ? statusResult.scans : []
+  };
+}
+
+async function getFastAuditSummary(env, sessionId) {
+  const status = await getAuditStatusForSession(env, sessionId);
+  if (!status) return null;
+  await ensureInventorySnapshot(env, { allowStale: true });
+  return buildSheetAuditSummaryFromScans(status);
+}
+
+async function getFastGlobalAuditSummary(env, sessionIds) {
+  const ids = [...new Set(sessionIds.map((sessionId) => String(sessionId || "").trim()).filter(Boolean))];
+  if (!ids.length) return null;
+  if (ids.length > 50) throw new Error("Global audit review is limited to 50 sessions at a time.");
+
+  await ensureInventorySnapshot(env, { allowStale: true });
+  const selectedSessions = [];
+  const scans = [];
+  for (let index = 0; index < ids.length; index += GLOBAL_AUDIT_STATUS_CONCURRENCY) {
+    const batchIds = ids.slice(index, index + GLOBAL_AUDIT_STATUS_CONCURRENCY);
+    const batchStatuses = await Promise.all(batchIds.map((sessionId) => getAuditStatusForSession(env, sessionId)));
+    batchStatuses.forEach((status, batchIndex) => {
+      const sessionId = batchIds[batchIndex];
+      if (!status) throw new Error("Audit session was not found: " + sessionId);
+      selectedSessions.push(status.session);
+      status.scans.forEach((scan) => scans.push(scan));
+    });
+  }
+
+  return buildSheetAuditSummaryFromScans({
+    session: {
+      session_id: "global:" + ids.join(","),
+      session_name: "Global audit review",
+      sheet_tab_name: "",
+      thread_id: "pwa-audit",
+      started_at: "",
+      started_by: "PWA Scanner",
+      ended_at: "",
+      ended_by: "",
+      status: "global"
+    },
+    scans,
+    selectedSessions,
+    includeUnscannedInventory: true
+  });
 }
 
 async function getAuditSummary(request, env) {
@@ -1285,6 +1354,10 @@ async function getAuditSummary(request, env) {
   if (!sessionId && !sessionIds.length) return json({ ok: false, error: "Audit session is required." }, 400);
   try {
     if (sessionIds.length) {
+      try {
+        const fastGlobalSummary = await getFastGlobalAuditSummary(env, sessionIds);
+        if (fastGlobalSummary) return json({ ok: true, summary: prepareAuditSummary(fastGlobalSummary) });
+      } catch (_) {}
       const data = await appsScriptPost(env, "audit/summary", { sessionIds });
       return json({ ok: true, summary: prepareAuditSummary(data.summary) });
     }
