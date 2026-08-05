@@ -472,7 +472,7 @@ function renderAuditSummary() {
     <div><span>Collectr qty</span><strong>${Number(totals.collectrQuantity || 0)}</strong></div>
   </div>
   ${selectedSessions.length > 1 ? `<div class="audit-review-context">${selectedSessions.length} locations combined: ${escapeHtml(selectedSessions.map((session) => session.session_name).join(", "))}</div>` : ""}
-  ${collectr.pendingCount || auditCollectrLoadRunning || auditCollectrLoadStopped ? `<div class="audit-review-progress"><span>${auditCollectrLoadStopped ? "Collectr check stopped" : auditCollectrLoadRunning ? "Collectr check running on VPS" : "Collectr check"} ${Number(collectr.loadedCount || 0)}/${Number((collectr.loadedCount || 0) + (collectr.pendingCount || 0))} loaded.</span>${auditCollectrLoadRunning ? `<button type="button" class="secondary compact-button" data-audit-action="stop-collectr-load">Stop</button>` : ""}</div>` : ""}
+  ${collectr.pendingCount || auditCollectrLoadRunning || auditCollectrLoadStopped ? `<div class="audit-review-progress"><span>${auditCollectrLoadStopped ? "Collectr check stopped" : auditCollectrLoadRunning ? "Collectr check running on VPS" : "Collectr check ready"} ${Number(collectr.loadedCount || 0)}/${Number((collectr.loadedCount || 0) + (collectr.pendingCount || 0))} loaded.</span>${auditCollectrLoadRunning ? `<button type="button" class="secondary compact-button" data-audit-action="stop-collectr-load">Stop</button>` : collectr.pendingCount ? `<button type="button" class="secondary compact-button" data-audit-action="start-collectr-load">Load Collectr</button>` : ""}</div>` : ""}
   ${syncableRows.length || auditCollectrSyncAllRunning ? `<div class="audit-review-progress audit-review-bulk"><span>${auditCollectrSyncAllRunning ? "Sync all running " + auditCollectrSyncAllCompleted + "/" + auditCollectrSyncAllTotal + " synced" + (auditCollectrSyncAllFailed ? " · " + auditCollectrSyncAllFailed + " failed" : "") : syncableRows.length + " Collectr update" + (syncableRows.length === 1 ? "" : "s") + " ready"}</span>${syncableRows.length ? `<button type="button" class="secondary compact-button" data-audit-action="sync-all-collectr" ${auditCollectrSyncAllRunning ? "disabled" : ""}>Sync all</button>` : ""}</div>` : ""}
   <div class="audit-review-list">
     ${visibleRows.length ? visibleRows.map((row) => {
@@ -786,6 +786,17 @@ function renderGlobalAuditSessionPicker(sessions) {
   </form>`);
 }
 
+function renderGlobalAuditLoading(selectedCount) {
+  elements.auditSummaryPanel.hidden = false;
+  elements.auditSummaryPanel.innerHTML = `<div class="audit-loading">
+    <div class="audit-loading-copy">
+      <strong>Loading selected sessions</strong>
+      <span>${Number(selectedCount || 0)} session${Number(selectedCount || 0) === 1 ? "" : "s"} selected. Combining scans and comparing against sheet inventory.</span>
+    </div>
+    <div class="audit-loading-bar"><span></span></div>
+  </div>`;
+}
+
 async function loadGlobalAuditSummary(sessionIds) {
   const ids = (Array.isArray(sessionIds) ? sessionIds : []).map((sessionId) => String(sessionId || "").trim()).filter(Boolean);
   if (!ids.length) throw new Error("Select at least one audit session.");
@@ -799,8 +810,7 @@ async function loadGlobalAuditSummary(sessionIds) {
   auditCollectrJobId = "";
   saveAuditState();
   renderAuditState();
-  elements.auditSummaryPanel.hidden = false;
-  elements.auditSummaryPanel.innerHTML = `<div class="audit-review-empty">Loading global audit review...</div>`;
+  renderGlobalAuditLoading(ids.length);
   const response = await fetch("/api/audit/summary", {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-App-Pin": pin },
@@ -817,7 +827,6 @@ async function loadGlobalAuditSummary(sessionIds) {
   recomputeAuditSummaryTotals();
   saveAuditState();
   renderAuditState();
-  void loadAuditCollectrSummaryBatches(lastAuditReviewSessionId, loadVersion);
   return auditSummary;
 }
 
@@ -916,6 +925,33 @@ function applyAuditCollectrSyncError(cardId, message, options = {}) {
   });
 }
 
+function compactAuditCollectrJobRow(row) {
+  const item = row.item || {};
+  return {
+    cardId: row.cardId,
+    scannedCount: Number(row.scannedCount || 0),
+    sheetQuantity: Number(row.sheetQuantity || 0),
+    status: row.status || "",
+    unscanned: Boolean(row.unscanned),
+    recordKeys: Array.isArray(row.recordKeys) ? row.recordKeys.slice(0, 20) : [],
+    item: {
+      cardId: item.cardId || row.cardId || "",
+      name: item.name || "",
+      setName: item.setName || "",
+      cardNumber: item.cardNumber || "",
+      variance: item.variance || "",
+      grade: item.grade || "",
+      portfolioName: item.portfolioName || "",
+      collectrCollectionId: item.collectrCollectionId || "",
+      collectrPortfolioId: item.collectrPortfolioId || "",
+      collectrProductId: item.collectrProductId || "",
+      collectrSubType: item.collectrSubType || "",
+      collectrGradeId: item.collectrGradeId || "",
+      collectrUserOwnedProductId: item.collectrUserOwnedProductId || ""
+    }
+  };
+}
+
 async function loadAuditCollectrSummaryBatches(sessionId, loadVersion = auditSummaryLoadVersion) {
   if (auditCollectrLoadRunning) return;
   const rows = auditSummary && Array.isArray(auditSummary.rows)
@@ -929,7 +965,7 @@ async function loadAuditCollectrSummaryBatches(sessionId, loadVersion = auditSum
     const startResponse = await fetch("/api/audit/collectr-job/start", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-App-Pin": pin },
-      body: JSON.stringify({ sessionId, rows })
+      body: JSON.stringify({ sessionId, rows: rows.map(compactAuditCollectrJobRow) })
     });
     const startData = await startResponse.json();
     if (startResponse.status === 401) {
@@ -1714,6 +1750,14 @@ elements.globalAuditModal.addEventListener("click", (event) => {
   if (closeButton) closeGlobalAuditModal();
 });
 elements.auditSummaryPanel.addEventListener("click", async (event) => {
+  const startButton = event.target.closest("button[data-audit-action='start-collectr-load']");
+  if (startButton) {
+    if (!auditSummary || !auditSummary.session) return;
+    startButton.disabled = true;
+    startButton.textContent = "Starting";
+    void loadAuditCollectrSummaryBatches(auditSummary.session.session_id, auditSummaryLoadVersion);
+    return;
+  }
   const stopButton = event.target.closest("button[data-audit-action='stop-collectr-load']");
   if (stopButton) {
     const jobId = auditCollectrJobId;
