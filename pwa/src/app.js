@@ -528,6 +528,7 @@ function renderAuditState() {
       const canUndo = entry.status === "synced";
       const canRetry = entry.status === "error" || entry.status === "undo_error";
       const needsNotes = entry.status === "needs_notes";
+      const canEditNotes = entry.kind === "issue" && (entry.status === "needs_notes" || entry.status === "pending");
       return `<div class="audit-entry ${entry.kind || ""}">
         <div class="audit-entry-copy"><strong>${escapeHtml(entry.name || "Unknown card")}</strong><small>${escapeHtml(subtitle)}</small></div>
         <span>${escapeHtml(entry.message || "Recorded")}</span>
@@ -535,7 +536,8 @@ function renderAuditState() {
           ${canCancel ? `<button type="button" class="secondary compact-button" data-audit-action="cancel" data-record-key="${escapeHtml(entry.recordKey)}">Cancel</button>` : ""}
           ${canUndo ? `<button type="button" class="secondary compact-button" data-audit-action="undo" data-record-key="${escapeHtml(entry.recordKey)}">Undo</button>` : ""}
           ${canRetry ? `<button type="button" class="secondary compact-button" data-audit-action="retry" data-record-key="${escapeHtml(entry.recordKey)}">Retry</button>` : ""}
-          ${needsNotes ? `<button type="button" class="secondary compact-button" data-audit-action="notes" data-record-key="${escapeHtml(entry.recordKey)}">Notes</button><button type="button" class="secondary compact-button" data-audit-action="queue-missing" data-record-key="${escapeHtml(entry.recordKey)}">Queue</button>` : ""}
+          ${canEditNotes ? `<button type="button" class="secondary compact-button" data-audit-action="notes" data-record-key="${escapeHtml(entry.recordKey)}">${needsNotes ? "Notes" : "Edit notes"}</button>` : ""}
+          ${needsNotes ? `<button type="button" class="secondary compact-button" data-audit-action="queue-missing" data-record-key="${escapeHtml(entry.recordKey)}">Queue</button>` : ""}
         </div>
         ${needsNotes ? `<form class="audit-entry-notes" data-record-key="${escapeHtml(entry.recordKey)}"><input name="notes" value="${escapeHtml(entry.notes || "")}" placeholder="Add notes for this missing ID"><button type="submit" class="secondary compact-button">Save notes</button></form>` : ""}
       </div>`;
@@ -1096,6 +1098,19 @@ async function prepareAuditScanEntry(recordKey, cardId) {
     }
     if (!response.ok || !data.ok) throw new Error(data.error || "Lookup failed.");
     if (!data.item) {
+      const reusedNotes = findMissingAuditNotesForCard(cardId, recordKey);
+      if (reusedNotes) {
+        updateAuditLogEntry(recordKey, {
+          name: cardId,
+          setName: "",
+          kind: "issue",
+          notes: reusedNotes,
+          status: "pending",
+          message: "Missing ID noted; queued for review"
+        });
+        void drainAuditSaveQueue();
+        return;
+      }
       updateAuditLogEntry(recordKey, {
         name: cardId,
         setName: "",
@@ -1149,7 +1164,7 @@ function findMissingAuditNotesForCard(cardId, excludeRecordKey = "") {
 
 function openMissingNotesModal(recordKey) {
   const entry = auditLog.find((candidate) => candidate.recordKey === recordKey);
-  if (!entry || entry.status !== "needs_notes") return;
+  if (!entry || entry.kind !== "issue" || (entry.status !== "needs_notes" && entry.status !== "pending")) return;
   const reusedNotes = entry.notes || findMissingAuditNotesForCard(entry.cardId, recordKey);
   if (reusedNotes && reusedNotes !== entry.notes) {
     updateAuditLogEntry(recordKey, { notes: reusedNotes });
@@ -1170,7 +1185,7 @@ function closeMissingNotesModal() {
 
 function queueMissingAuditScan(recordKey, notes) {
   const entry = auditLog.find((candidate) => candidate.recordKey === recordKey);
-  if (!entry || entry.status !== "needs_notes") return;
+  if (!entry || entry.kind !== "issue" || (entry.status !== "needs_notes" && entry.status !== "pending")) return;
   const normalizedNotes = String(notes || "").trim() || findMissingAuditNotesForCard(entry.cardId, recordKey);
   updateAuditLogEntry(recordKey, {
     notes: normalizedNotes,
