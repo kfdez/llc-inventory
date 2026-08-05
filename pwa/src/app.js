@@ -1135,12 +1135,28 @@ function recoverCheckingAuditScans() {
   return checkingEntries.length;
 }
 
+function findMissingAuditNotesForCard(cardId, excludeRecordKey = "") {
+  const normalizedCardId = extractCardId(cardId).toUpperCase();
+  if (!normalizedCardId) return "";
+  const match = auditLog.find((entry) => {
+    return entry &&
+      entry.recordKey !== excludeRecordKey &&
+      extractCardId(entry.cardId).toUpperCase() === normalizedCardId &&
+      String(entry.notes || "").trim();
+  });
+  return match ? String(match.notes || "").trim() : "";
+}
+
 function openMissingNotesModal(recordKey) {
   const entry = auditLog.find((candidate) => candidate.recordKey === recordKey);
   if (!entry || entry.status !== "needs_notes") return;
+  const reusedNotes = entry.notes || findMissingAuditNotesForCard(entry.cardId, recordKey);
+  if (reusedNotes && reusedNotes !== entry.notes) {
+    updateAuditLogEntry(recordKey, { notes: reusedNotes });
+  }
   missingNotesRecordKey = recordKey;
   elements.missingNotesCardId.textContent = entry.cardId || "Unknown card ID";
-  elements.missingNotesInput.value = entry.notes || "";
+  elements.missingNotesInput.value = reusedNotes || "";
   elements.missingNotesBackdrop.hidden = false;
   elements.missingNotesModal.hidden = false;
   window.setTimeout(() => elements.missingNotesInput.focus(), 0);
@@ -1155,7 +1171,7 @@ function closeMissingNotesModal() {
 function queueMissingAuditScan(recordKey, notes) {
   const entry = auditLog.find((candidate) => candidate.recordKey === recordKey);
   if (!entry || entry.status !== "needs_notes") return;
-  const normalizedNotes = String(notes || "").trim();
+  const normalizedNotes = String(notes || "").trim() || findMissingAuditNotesForCard(entry.cardId, recordKey);
   updateAuditLogEntry(recordKey, {
     notes: normalizedNotes,
     status: "pending",
