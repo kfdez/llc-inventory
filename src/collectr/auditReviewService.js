@@ -2,8 +2,9 @@ const { createHash } = require("crypto");
 const { fetchCollectrJson } = require("./client");
 
 const JOB_TYPE = "audit_collectr_review";
-const BATCH_DELAY_MS = 250;
+const BATCH_DELAY_MS = 1250;
 const PORTFOLIO_CACHE_TTL_MS = 10 * 60 * 1000;
+const FINGERPRINT_VERSION = 2;
 
 function normalizeValue(value) {
   return String(value || "")
@@ -18,6 +19,7 @@ function normalizeCardId(cardId) {
 
 function fingerprintPayload(sessionId, rows) {
   const source = JSON.stringify({
+    version: FINGERPRINT_VERSION,
     sessionId,
     rows: rows.map((row) => ({
       cardId: normalizeCardId(row.cardId),
@@ -26,6 +28,10 @@ function fingerprintPayload(sessionId, rows) {
     })).sort((a, b) => a.cardId.localeCompare(b.cardId))
   });
   return createHash("sha256").update(source).digest("hex");
+}
+
+function isForbiddenCollectrError(error) {
+  return Number(error && error.status || 0) === 403 || /HTTP 403|forbidden/i.test(String(error && error.message || error || ""));
 }
 
 function cloneJson(value) {
@@ -184,6 +190,21 @@ class AuditCollectrReviewService {
       try {
         resolvedRow = await this.enrichRow(nextRow);
       } catch (error) {
+        if (isForbiddenCollectrError(error)) {
+          const message = "Collectr returned HTTP 403 and blocked the audit review. Stop for now, then try again later or refresh the Collectr token.";
+          this.store.updateJob(job.id, {
+            state: "failed",
+            error: message,
+            result: this.withTotals(job.payload, {
+              ...result,
+              errors: (result.errors || []).concat([{ cardId: nextRow.cardId, error: message }]),
+              rowsById,
+              loaded: Object.keys(rowsById).length
+            }),
+            lockedUntilMs: 0
+          });
+          return;
+        }
         resolvedRow = {
           ...nextRow,
           collectrQuantity: null,

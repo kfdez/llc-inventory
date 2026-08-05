@@ -994,6 +994,11 @@ async function loadAuditCollectrSummaryBatches(sessionId, loadVersion = auditSum
       if (!response.ok || !data.ok) throw new Error(data.error || "Unable to load Collectr job.");
       if (loadVersion !== auditSummaryLoadVersion) break;
       mergeAuditCollectrRows(data.job && data.job.rows);
+      if (data.job && data.job.state === "failed") {
+        const message = data.job.error || "Collectr check failed.";
+        setErrorStatus("Collectr check failed", message);
+        elements.cameraMessage.textContent = message;
+      }
       if (data.job && (data.job.state === "complete" || data.job.state === "canceled" || data.job.state === "failed")) {
         auditCollectrLoadStopped = data.job.state === "canceled";
         break;

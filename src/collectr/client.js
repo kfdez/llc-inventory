@@ -47,10 +47,12 @@ async function fetchCollectrJson(config, path, query = {}, options = {}) {
     try {
       data = JSON.parse(text || "{}");
     } catch (_) {
-      throw new Error(
+      const error = new Error(
         "Collectr returned non-JSON: HTTP " + response.status +
         ", content-type " + (response.headers.get("content-type") || "unknown")
       );
+      error.status = response.status;
+      throw error;
     }
     if (!response.ok) {
       const error = new Error(data.error || data.message || "Collectr request failed with HTTP " + response.status + ".");
