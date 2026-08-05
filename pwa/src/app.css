@@ -661,6 +661,17 @@ summary {
   justify-content: flex-end;
 }
 .audit-entry-actions:empty { display: none; }
+.audit-entry-notes {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+.audit-entry-notes input {
+  min-height: 36px;
+  padding: 6px 9px;
+  background: rgba(255, 255, 255, .72);
+}
 .audit-review {
   margin: 0 0 12px;
   padding: 10px;

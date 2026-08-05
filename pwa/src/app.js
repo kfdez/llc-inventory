@@ -520,6 +520,7 @@ function renderAuditState() {
       const canCancel = entry.status === "pending";
       const canUndo = entry.status === "synced";
       const canRetry = entry.status === "error" || entry.status === "undo_error";
+      const needsNotes = entry.status === "needs_notes";
       return `<div class="audit-entry ${entry.kind || ""}">
         <div class="audit-entry-copy"><strong>${escapeHtml(entry.name || "Unknown card")}</strong><small>${escapeHtml(subtitle)}</small></div>
         <span>${escapeHtml(entry.message || "Recorded")}</span>
@@ -527,7 +528,9 @@ function renderAuditState() {
           ${canCancel ? `<button type="button" class="secondary compact-button" data-audit-action="cancel" data-record-key="${escapeHtml(entry.recordKey)}">Cancel</button>` : ""}
           ${canUndo ? `<button type="button" class="secondary compact-button" data-audit-action="undo" data-record-key="${escapeHtml(entry.recordKey)}">Undo</button>` : ""}
           ${canRetry ? `<button type="button" class="secondary compact-button" data-audit-action="retry" data-record-key="${escapeHtml(entry.recordKey)}">Retry</button>` : ""}
+          ${needsNotes ? `<button type="button" class="secondary compact-button" data-audit-action="queue-missing" data-record-key="${escapeHtml(entry.recordKey)}">Queue</button>` : ""}
         </div>
+        ${needsNotes ? `<form class="audit-entry-notes" data-record-key="${escapeHtml(entry.recordKey)}"><input name="notes" value="${escapeHtml(entry.notes || "")}" placeholder="Add notes for this missing ID"><button type="submit" class="secondary compact-button">Save notes</button></form>` : ""}
       </div>`;
     }).join("")
     : "Start an audit session and scan labels.";
@@ -1074,14 +1077,6 @@ function queueAuditScan(cardId) {
   elements.cameraMessage.textContent = cardId + " detected. Checking inventory before saving.";
 }
 
-function promptForMissingAuditNotes(cardId) {
-  const value = window.prompt(
-    "This Card ID was not found in the sheet.\n\nEnter notes to help review it manually:",
-    ""
-  );
-  return String(value || "").trim();
-}
-
 async function prepareAuditScanEntry(recordKey, cardId) {
   if (auditLookupRecordKeys.has(recordKey)) return;
   auditLookupRecordKeys.add(recordKey);
@@ -1094,16 +1089,13 @@ async function prepareAuditScanEntry(recordKey, cardId) {
     }
     if (!response.ok || !data.ok) throw new Error(data.error || "Lookup failed.");
     if (!data.item) {
-      const notes = promptForMissingAuditNotes(cardId);
       updateAuditLogEntry(recordKey, {
         name: cardId,
         setName: "",
         kind: "issue",
-        notes,
-        status: "pending",
-        message: notes ? "Missing ID noted; queued for review" : "Missing ID queued for review"
+        status: "needs_notes",
+        message: "Missing ID; add notes or queue for review"
       });
-      void drainAuditSaveQueue();
       return;
     }
     updateAuditLogEntry(recordKey, {
@@ -1133,6 +1125,18 @@ function recoverCheckingAuditScans() {
     void prepareAuditScanEntry(entry.recordKey, entry.cardId);
   });
   return checkingEntries.length;
+}
+
+function queueMissingAuditScan(recordKey, notes) {
+  const entry = auditLog.find((candidate) => candidate.recordKey === recordKey);
+  if (!entry || entry.status !== "needs_notes") return;
+  const normalizedNotes = String(notes || "").trim();
+  updateAuditLogEntry(recordKey, {
+    notes: normalizedNotes,
+    status: "pending",
+    message: normalizedNotes ? "Missing ID noted; queued for review" : "Missing ID queued for review"
+  });
+  void drainAuditSaveQueue();
 }
 
 async function sendAuditScan(entry) {
@@ -1585,7 +1589,16 @@ elements.auditLog.addEventListener("click", (event) => {
   } else if (button.dataset.auditAction === "retry") {
     updateAuditLogEntry(recordKey, { status: "pending", kind: "", attempts: 0, message: "Queued" });
     void drainAuditSaveQueue();
+  } else if (button.dataset.auditAction === "queue-missing") {
+    queueMissingAuditScan(recordKey, "");
   }
+});
+elements.auditLog.addEventListener("submit", (event) => {
+  const form = event.target.closest(".audit-entry-notes");
+  if (!form) return;
+  event.preventDefault();
+  const notesInput = form.querySelector("input[name='notes']");
+  queueMissingAuditScan(form.dataset.recordKey, notesInput ? notesInput.value : "");
 });
 elements.auditSummaryPanel.addEventListener("submit", async (event) => {
   const form = event.target.closest("#globalAuditSessionForm");
