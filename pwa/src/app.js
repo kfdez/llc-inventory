@@ -126,6 +126,7 @@ let auditCollectrSyncJobId = storageGet(localStorage, "auditCollectrSyncJobId", 
 let auditCollectrSyncAllTotal = 0;
 let auditCollectrSyncAllCompleted = 0;
 let auditCollectrSyncAllFailed = 0;
+let auditCollectrSyncAllRetry = 0;
 let auditCaptureFeedbackTimer = 0;
 let missingNotesRecordKey = "";
 const auditLookupRecordKeys = new Set();
@@ -475,7 +476,8 @@ function getAuditSyncAllText() {
   const processed = auditCollectrSyncAllCompleted + auditCollectrSyncAllFailed;
   return "Sync all running " + processed + "/" + auditCollectrSyncAllTotal + " processed | " +
     auditCollectrSyncAllCompleted + " synced" +
-    (auditCollectrSyncAllFailed ? " | " + auditCollectrSyncAllFailed + " failed" : "");
+    (auditCollectrSyncAllFailed ? " | " + auditCollectrSyncAllFailed + " failed" : "") +
+    (auditCollectrSyncAllRetry ? " | " + auditCollectrSyncAllRetry + " waiting" : "");
 }
 
 function renderAuditSyncProgress() {
@@ -1095,6 +1097,7 @@ async function syncAllAuditCollectrRows() {
   auditCollectrSyncAllTotal = rows.length;
   auditCollectrSyncAllCompleted = 0;
   auditCollectrSyncAllFailed = 0;
+  auditCollectrSyncAllRetry = 0;
   auditCollectrSyncJobId = "";
   renderAuditSummary();
   try {
@@ -1142,6 +1145,7 @@ async function syncAllAuditCollectrRows() {
       mergeAuditCollectrSyncRows(job.rows, { render: false });
       auditCollectrSyncAllCompleted = Number(job.completed || 0);
       auditCollectrSyncAllFailed = Number(job.failed || 0);
+      auditCollectrSyncAllRetry = Number(job.retry || 0);
       renderAuditSyncProgress();
       if (["complete", "failed", "canceled"].includes(job.state)) {
         if (job.state === "canceled") auditCollectrSyncAllStopRequested = true;
@@ -1188,6 +1192,7 @@ async function syncAllAuditCollectrRows() {
     auditCollectrSyncAllTotal = 0;
     auditCollectrSyncAllCompleted = 0;
     auditCollectrSyncAllFailed = 0;
+    auditCollectrSyncAllRetry = 0;
     renderAuditSummary();
   }
 }

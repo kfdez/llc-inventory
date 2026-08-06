@@ -12,6 +12,7 @@ const {
 const JOB_TYPE = "audit_collectr_sync";
 const BATCH_DELAY_MS = 5000;
 const MAX_ROW_ATTEMPTS = 3;
+const RATE_LIMIT_BACKOFF_MS = 120000;
 const UNGRADED_GRADE_ID = "52";
 const FINGERPRINT_VERSION = 1;
 
@@ -66,6 +67,7 @@ class AuditCollectrSyncService {
     this.logger = logger;
     this.timer = null;
     this.running = false;
+    this.portfolioCache = null;
   }
 
   start() {
@@ -190,6 +192,34 @@ class AuditCollectrSyncService {
           error: ""
         };
       } catch (error) {
+        if (error.status === 429) {
+          rowsById[cardKey] = {
+            ...nextRow,
+            status: "retry",
+            attempts: Number(existing.attempts || 0),
+            error: "Collectr rate limit hit. Waiting before retrying.",
+            upstreamStatus: error.status || "",
+            collectrPath: error.collectrPath || "",
+            collectrMethod: error.collectrMethod || ""
+          };
+          const nextResult = this.withTotals(job.payload, {
+            ...result,
+            rowsById
+          });
+          this.store.updateJob(job.id, {
+            state: "running",
+            result: nextResult,
+            notBeforeMs: Date.now() + RATE_LIMIT_BACKOFF_MS,
+            lockedUntilMs: 0
+          });
+          this.logger.warn({
+            cardId: nextRow.cardId,
+            path: error.collectrPath,
+            method: error.collectrMethod,
+            backoffMs: RATE_LIMIT_BACKOFF_MS
+          }, "Collectr audit sync paused for rate limit.");
+          return;
+        }
         const finalFailure = attempt >= MAX_ROW_ATTEMPTS;
         rowsById[cardKey] = {
           ...nextRow,
@@ -226,6 +256,7 @@ class AuditCollectrSyncService {
       total: payload.total,
       completed: rows.filter((row) => row.status === "synced").length,
       failed: rows.filter((row) => row.status === "failed").length,
+      retry: rows.filter((row) => row.status === "retry").length,
       rowsById
     };
   }
@@ -366,10 +397,23 @@ class AuditCollectrSyncService {
       return { id: String(directId), name: row.collectrPortfolioName || row.item && row.item.portfolioName || "" };
     }
     const expected = normalizeValue(row.collectrPortfolioName || row.item && row.item.portfolioName || "");
-    const portfolios = selectDataArray(await fetchCollectrJson(this.config, "/accounts/" + encodeURIComponent(this.config.accountId) + "/collections"));
+    const portfolios = await this.getPortfolios();
     const match = portfolios.find((portfolio) => normalizeValue(portfolio.name || portfolio.collection_name) === expected);
     if (!match) throw new Error("Collectr portfolio not found for " + row.cardId + ".");
     return { id: match.id || match.collection_id, name: match.name || match.collection_name || "" };
+  }
+
+  async getPortfolios() {
+    const now = Date.now();
+    if (this.portfolioCache && this.portfolioCache.expiresAt > now) {
+      return this.portfolioCache.rows;
+    }
+    const rows = selectDataArray(await fetchCollectrJson(this.config, "/accounts/" + encodeURIComponent(this.config.accountId) + "/collections"));
+    this.portfolioCache = {
+      rows,
+      expiresAt: now + 10 * 60 * 1000
+    };
+    return rows;
   }
 
   selectOwnedLine(row, lines, productId) {
@@ -403,6 +447,7 @@ class AuditCollectrSyncService {
       total: Number(result.total || job.payload.total || 0),
       completed: Number(result.completed || 0),
       failed: Number(result.failed || 0),
+      retry: Number(result.retry || 0),
       rows: Object.values(result.rowsById || {}),
       error: job.error || "",
       createdAt: job.createdAt,
