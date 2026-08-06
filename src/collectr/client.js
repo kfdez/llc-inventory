@@ -32,6 +32,27 @@ function buildRelayUrl(config) {
   return new URL("collectr/relay", normalizedBase);
 }
 
+function buildCollectrHeaders(config) {
+  const headers = {
+    "Accept": "application/json, text/plain, */*",
+    "Content-Type": "application/json",
+    "Origin": "https://app.getcollectr.com",
+    "Referer": "https://app.getcollectr.com/",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Sec-CH-UA": "\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"150\", \"Google Chrome\";v=\"150\"",
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": "\"Windows\"",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-site",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
+  };
+  if (config.authToken) {
+    headers.Authorization = config.authToken;
+  }
+  return headers;
+}
+
 async function fetchRelayJson(config, path, query = {}, options = {}) {
   const relayUrl = buildRelayUrl(config);
   if (!relayUrl) return null;
@@ -94,13 +115,7 @@ async function fetchCollectrJson(config, path, query = {}, options = {}) {
     const response = await fetch(buildCollectrUrl(config, path, query), {
       method,
       signal: controller.signal,
-      headers: {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "Authorization": config.authToken,
-        "Origin": "https://app.getcollectr.com",
-        "Referer": "https://app.getcollectr.com/"
-      },
+      headers: buildCollectrHeaders(config),
       body: method === "GET" ? undefined : JSON.stringify(options.body || {})
     });
     const text = await response.text();
@@ -129,6 +144,7 @@ async function fetchCollectrJson(config, path, query = {}, options = {}) {
 
 module.exports = {
   buildCollectrUrl,
+  buildCollectrHeaders,
   fetchCollectrJson,
   isAllowedCollectrPath
 };

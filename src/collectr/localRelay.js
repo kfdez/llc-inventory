@@ -59,11 +59,33 @@ function loadRelayConfig() {
     host: optionalEnv("LOCAL_COLLECTR_RELAY_HOST", "127.0.0.1"),
     port: numberEnv("LOCAL_COLLECTR_RELAY_PORT", 8790),
     secret: optionalEnv("LOCAL_COLLECTR_RELAY_SECRET") || optionalEnv("COLLECTR_RELAY_SECRET") || optionalEnv("COLLECTR_PROXY_SECRET"),
+    requestDelayMs: numberEnv("LOCAL_COLLECTR_RELAY_DELAY_MS", 3000),
     collectr: {
       authToken: optionalEnv("COLLECTR_AUTH_TOKEN"),
       apiBaseUrl: optionalEnv("COLLECTR_API_BASE_URL", "https://api-v2.getcollectr.com"),
       requestTimeoutMs: numberEnv("COLLECTR_PROXY_REQUEST_TIMEOUT_MS", 30000)
     }
+  };
+}
+
+function createRequestQueue(delayMs) {
+  let queue = Promise.resolve();
+  let lastRequestAt = 0;
+
+  return function enqueue(task) {
+    const next = queue.catch(() => {}).then(async () => {
+      const waitMs = Math.max(0, lastRequestAt + delayMs - Date.now());
+      if (waitMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+      }
+      try {
+        return await task();
+      } finally {
+        lastRequestAt = Date.now();
+      }
+    });
+    queue = next.then(() => {}, () => {});
+    return next;
   };
 }
 
@@ -74,6 +96,7 @@ function startLocalCollectrRelay({ config, logger }) {
   if (!config.collectr.authToken) {
     throw new Error("Missing Collectr token. Set COLLECTR_AUTH_TOKEN.");
   }
+  const enqueueCollectrRequest = createRequestQueue(config.requestDelayMs);
 
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
@@ -106,10 +129,10 @@ function startLocalCollectrRelay({ config, logger }) {
       if (!isAllowedCollectrPath(path)) {
         throw new Error("Collectr path is not allowed.");
       }
-      const data = await fetchCollectrJson(config.collectr, path, body.query || {}, {
+      const data = await enqueueCollectrRequest(() => fetchCollectrJson(config.collectr, path, body.query || {}, {
         method,
         body: body.body || {}
-      });
+      }));
       if (method !== "GET") {
         logger.info({
           method,
@@ -138,7 +161,8 @@ function startLocalCollectrRelay({ config, logger }) {
   server.listen(config.port, config.host, () => {
     logger.info({
       host: config.host,
-      port: config.port
+      port: config.port,
+      requestDelayMs: config.requestDelayMs
     }, "Local Collectr relay listening.");
   });
 
