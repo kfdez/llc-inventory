@@ -155,6 +155,8 @@ class AuditCollectrReviewService {
     );
     if (existing) return this.serializeJob(existing);
 
+    this.cancelActiveJobs();
+
     const job = this.store.createJob({
       type: JOB_TYPE,
       state: "pending",
@@ -192,7 +194,7 @@ class AuditCollectrReviewService {
     const job = this.store.getJob(String(jobId || "").trim());
     if (!job || job.type !== JOB_TYPE) throw new Error("Collectr review job not found.");
     if (job.state === "complete") return this.serializeJob(job);
-    return this.serializeJob(this.store.updateJob(job.id, { state: "canceled" }));
+    return this.serializeJob(this.store.updateJob(job.id, { state: "canceled", lockedUntilMs: 0 }));
   }
 
   async processNext() {
@@ -256,6 +258,12 @@ class AuditCollectrReviewService {
         };
       }
 
+      const currentJob = this.store.getJob(job.id);
+      if (!currentJob || currentJob.state === "canceled") {
+        if (currentJob) this.store.updateJob(job.id, { lockedUntilMs: 0 });
+        return;
+      }
+
       rowsById[normalizeCardId(nextRow.cardId)] = resolvedRow;
       const nextResult = this.withTotals(job.payload, {
         ...result,
@@ -270,6 +278,14 @@ class AuditCollectrReviewService {
     } finally {
       this.running = false;
     }
+  }
+
+  cancelActiveJobs(exceptJobId) {
+    this.store.listJobs({ type: JOB_TYPE, limit: 200 }).forEach((job) => {
+      if (job.id !== exceptJobId && ["pending", "running"].includes(job.state)) {
+        this.store.updateJob(job.id, { state: "canceled", lockedUntilMs: 0 });
+      }
+    });
   }
 
   withTotals(payload, result) {

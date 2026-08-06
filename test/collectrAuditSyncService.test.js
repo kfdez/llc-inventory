@@ -1,5 +1,6 @@
 const assert = require("assert");
 const test = require("node:test");
+const { AuditCollectrReviewService } = require("../src/collectr/auditReviewService");
 const { AuditCollectrSyncService } = require("../src/collectr/auditSyncService");
 
 class MemoryJobStore {
@@ -169,4 +170,49 @@ test("audit Collectr sync adds catalog item back to portfolio when not currently
   assert.equal(completed.rows[0].collectrQuantity, 2);
   assert.equal(completed.rows[0].verified, true);
   assert.ok(requests.some((request) => request.method === "POST" && request.path === "/collections/account-1/products/642585"));
+});
+
+test("starting an audit Collectr review cancels older active review jobs", () => {
+  const store = new MemoryJobStore();
+  const service = new AuditCollectrReviewService({
+    store,
+    logger: { error() {} },
+    config: {
+      accountId: "account-1",
+      authToken: "Bearer token",
+      apiBaseUrl: "https://api-v2.getcollectr.com",
+      requestTimeoutMs: 1000
+    }
+  });
+  const oldRunning = store.createJob({
+    type: "audit_collectr_review",
+    state: "running",
+    payload: { sessionId: "old", fingerprint: "old", total: 1, rows: [] },
+    result: { sessionId: "old", total: 1, loaded: 0, rowsById: {} }
+  });
+  const oldPending = store.createJob({
+    type: "audit_collectr_review",
+    state: "pending",
+    payload: { sessionId: "older", fingerprint: "older", total: 1, rows: [] },
+    result: { sessionId: "older", total: 1, loaded: 0, rowsById: {} }
+  });
+
+  const job = service.startJob({
+    sessionId: "new",
+    rows: [{
+      cardId: "KYL-S-ABC12345",
+      scannedCount: 1,
+      sheetQuantity: 1,
+      item: {
+        cardId: "KYL-S-ABC12345",
+        name: "Crustle",
+        setName: "Black Bolt",
+        cardNumber: "130/086"
+      }
+    }]
+  });
+
+  assert.equal(job.state, "pending");
+  assert.equal(store.getJob(oldRunning.id).state, "canceled");
+  assert.equal(store.getJob(oldPending.id).state, "canceled");
 });
