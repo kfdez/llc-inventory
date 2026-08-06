@@ -67,6 +67,38 @@ function flattenProductDetailLines(data) {
   return rows;
 }
 
+function matchesInventoryProduct(product, item, options = {}) {
+  const subtype = item.collectrSubType || item.variance || "";
+  const expectedSet = normalizeValue(item.setName);
+  const expectedName = normalizeValue(item.name);
+  const expectedNumber = normalizeValue(item.cardNumber);
+  const expectedSubtype = normalizeValue(subtype);
+  return normalizeValue(product.catalog_group || product.set_name || product.group_name) === expectedSet &&
+    (!options.requireName || !expectedName || normalizeValue(product.product_name || product.name) === expectedName) &&
+    normalizeValue(product.card_number || product.number) === expectedNumber &&
+    (!expectedSubtype || normalizeValue(product.product_sub_type || product.sub_type || product.subType) === expectedSubtype);
+}
+
+function buildCatalogSearchString(item) {
+  return [item.setName, item.name, item.cardNumber]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join("\t");
+}
+
+function findUniqueCatalogProduct(item, products) {
+  const exactMatches = products.filter((product) => matchesInventoryProduct(product, item, { requireName: true }));
+  if (exactMatches.length === 1) return { product: exactMatches[0], warnings: [] };
+  if (exactMatches.length > 1) throw new Error("Collectr product match is ambiguous: " + exactMatches.length + " exact matches.");
+
+  const lineMatches = products.filter((product) => matchesInventoryProduct(product, item));
+  if (lineMatches.length === 1) return { product: lineMatches[0], warnings: [] };
+  if (lineMatches.length > 1) throw new Error("Collectr product match is ambiguous: " + lineMatches.length + " line matches.");
+
+  if (products.length === 1) return { product: products[0], warnings: ["Collectr catalog match used the only search result."] };
+  throw new Error("Collectr product not found for " + (item.name || item.cardId) + ".");
+}
+
 function getSummaryStatus(row) {
   if (!row.item) return "not-in-sheet";
   if (row.collectrError) return row.status === "match" ? "collectr-error" : row.status;
@@ -307,9 +339,6 @@ class AuditCollectrReviewService {
   async resolveProduct(item, portfolio) {
     const directId = String(item.collectrProductId || "").trim();
     const subtype = item.collectrSubType || item.variance || "";
-    const expectedSet = normalizeValue(item.setName);
-    const expectedName = normalizeValue(item.name);
-    const expectedNumber = normalizeValue(item.cardNumber);
     const expectedSubtype = normalizeValue(subtype);
     const collectionId = portfolio.id || portfolio.collection_id;
     if (directId) {
@@ -338,13 +367,15 @@ class AuditCollectrReviewService {
       limit: 1000
     }));
     const matches = ownedRows.filter((product) =>
-      normalizeValue(product.catalog_group || product.set_name || product.group_name) === expectedSet &&
-      normalizeValue(product.product_name || product.name) === expectedName &&
-      normalizeValue(product.card_number || product.number) === expectedNumber &&
-      (!expectedSubtype || normalizeValue(product.product_sub_type || product.sub_type || product.subType) === expectedSubtype)
+      matchesInventoryProduct(product, item, { requireName: true })
     );
-    const product = matches[0];
-    if (!product) throw new Error("Collectr product not found for " + (item.name || item.cardId) + ".");
+    let product = matches[0];
+    let warnings = matches.length > 1 ? ["Multiple Collectr products matched; using first match."] : [];
+    if (!product) {
+      const catalogResolution = await this.resolveCatalogProduct(item);
+      product = catalogResolution.product;
+      warnings = warnings.concat(catalogResolution.warnings, ["Product is not currently present in the resolved Collectr portfolio."]);
+    }
     const productId = String(product.product_id || product.id || "").trim();
     if (!productId) throw new Error("Collectr product match did not include an ID.");
     const detailRows = flattenProductDetailLines(await fetchCollectrJson(this.config, "/collections/" + encodeURIComponent(this.config.accountId) + "/products/" + encodeURIComponent(productId), {
@@ -362,8 +393,22 @@ class AuditCollectrReviewService {
         userOwnedProductId: selected.user_owned_product_id || "",
         quantity: selected.quantity || 0
       },
-      warnings: matches.length > 1 ? ["Multiple Collectr products matched; using first match."] : []
+      warnings
     };
+  }
+
+  async resolveCatalogProduct(item) {
+    const searchString = buildCatalogSearchString(item);
+    if (!searchString) throw new Error("Inventory row does not have enough detail to search Collectr.");
+    const data = await fetchCollectrJson(this.config, "/catalog", {
+      username: this.config.accountId,
+      searchString,
+      filters: "",
+      offset: 0,
+      limit: 30,
+      unstackedView: "true"
+    });
+    return findUniqueCatalogProduct(item, selectDataArray(data));
   }
 
   async resolveCollectrItem(item) {
@@ -403,6 +448,9 @@ module.exports = {
   AuditCollectrReviewService,
   JOB_TYPE,
   flattenProductDetailLines,
+  buildCatalogSearchString,
+  findUniqueCatalogProduct,
+  matchesInventoryProduct,
   normalizeCardId,
   normalizeValue,
   selectDataArray

@@ -1,6 +1,8 @@
 const { createHash } = require("crypto");
 const { fetchCollectrJson } = require("./client");
 const {
+  buildCatalogSearchString,
+  findUniqueCatalogProduct,
   flattenProductDetailLines,
   normalizeCardId,
   normalizeValue,
@@ -300,10 +302,14 @@ class AuditCollectrSyncService {
   async resolveRow(row) {
     const item = row.item || {};
     const portfolioId = item.collectrCollectionId || item.collectrPortfolioId || "";
-    const productId = row.collectrProductId || item.collectrProductId || "";
-    if (!productId) throw new Error("Collectr product ID is required for " + row.cardId + ".");
+    let productId = row.collectrProductId || item.collectrProductId || "";
 
     const portfolio = await this.resolvePortfolio(row, portfolioId);
+    if (!productId) {
+      const catalogResolution = await this.resolveCatalogProduct(row, item);
+      productId = String(catalogResolution.product.product_id || catalogResolution.product.id || "").trim();
+    }
+    if (!productId) throw new Error("Collectr product ID is required for " + row.cardId + ".");
     const ownedRows = selectDataArray(await fetchCollectrJson(this.config, "/collections/" + encodeURIComponent(this.config.accountId) + "/products", {
       collectionId: portfolio.id,
       productIds: productId,
@@ -327,6 +333,26 @@ class AuditCollectrSyncService {
         userOwnedProductId: selected.user_owned_product_id || row.collectrUserOwnedProductId || item.collectrUserOwnedProductId || ""
       }
     };
+  }
+
+  async resolveCatalogProduct(row, item) {
+    const searchItem = {
+      ...item,
+      cardId: row.cardId || item.cardId,
+      collectrSubType: row.collectrSubType || item.collectrSubType,
+      variance: item.variance || row.collectrSubType
+    };
+    const searchString = buildCatalogSearchString(searchItem);
+    if (!searchString) throw new Error("Inventory row does not have enough detail to search Collectr for " + row.cardId + ".");
+    const data = await fetchCollectrJson(this.config, "/catalog", {
+      username: this.config.accountId,
+      searchString,
+      filters: "",
+      offset: 0,
+      limit: 30,
+      unstackedView: "true"
+    });
+    return findUniqueCatalogProduct(searchItem, selectDataArray(data));
   }
 
   async resolvePortfolio(row, directId) {
