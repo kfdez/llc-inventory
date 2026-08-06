@@ -661,13 +661,27 @@ async function resolveCollectrItem(env, item) {
     productResolution.product.product_sub_type || item.collectrSubType || item.variance
   );
   const expectedGradeId = String(productResolution.product.grade_id || item.collectrGradeId || "").trim();
+  const expectedUserOwnedProductId = String(
+    productResolution.product.user_owned_product_id || item.collectrUserOwnedProductId || ""
+  ).trim();
   const ownedMatches = ownedProducts.filter((product) =>
     String(product.product_id || "") === String(productResolution.product.product_id || "") &&
     (!expectedSubtype || normalizeCollectrMatchValue(product.product_sub_type) === expectedSubtype) &&
     (!expectedGradeId || String(product.grade_id || "") === expectedGradeId)
   );
-  const selectedOwnedProduct = ownedMatches.length === 1 ? ownedMatches[0] :
-    ownedProducts.length === 1 ? ownedProducts[0] : null;
+  const userOwnedMatch = expectedUserOwnedProductId
+    ? ownedProducts.find((product) => String(product.user_owned_product_id || "") === expectedUserOwnedProductId)
+    : null;
+  const subtypeMatches = expectedSubtype
+    ? ownedProducts.filter((product) =>
+      String(product.product_id || "") === String(productResolution.product.product_id || "") &&
+      normalizeCollectrMatchValue(product.product_sub_type) === expectedSubtype
+    )
+    : [];
+  const selectedOwnedProduct = userOwnedMatch ||
+    (ownedMatches.length === 1 ? ownedMatches[0] : null) ||
+    (subtypeMatches.length === 1 ? subtypeMatches[0] : null) ||
+    (ownedProducts.length === 1 ? ownedProducts[0] : null);
 
   const warnings = portfolioResolution.warnings.slice();
   if (ownedMatches.length > 1) warnings.push("Collectr owned product lookup returned multiple matching lines.");
@@ -687,7 +701,8 @@ async function resolveCollectrItem(env, item) {
       subType: selectedOwnedProduct && selectedOwnedProduct.product_sub_type ||
         productResolution.product.product_sub_type || item.collectrSubType || item.variance || "",
       gradeId: selectedOwnedProduct && selectedOwnedProduct.grade_id ||
-        productResolution.product.grade_id || item.collectrGradeId || "",
+        productResolution.product.grade_id || item.collectrGradeId ||
+        (normalizeCollectrMatchValue(item.grade) === "ungraded" ? "52" : ""),
       userOwnedProductId: selectedOwnedProduct && selectedOwnedProduct.user_owned_product_id ||
         productResolution.product.user_owned_product_id || item.collectrUserOwnedProductId || "",
       source: productResolution.source

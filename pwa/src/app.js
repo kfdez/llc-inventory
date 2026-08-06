@@ -125,6 +125,7 @@ let auditCollectrLoadStopped = false;
 let auditCollectrAbortController = null;
 let auditSummaryLoadVersion = 0;
 let auditCollectrSyncAllRunning = false;
+let auditCollectrSyncAllStopRequested = false;
 let auditCollectrSyncAllTotal = 0;
 let auditCollectrSyncAllCompleted = 0;
 let auditCollectrSyncAllFailed = 0;
@@ -473,7 +474,7 @@ function renderAuditSummary() {
   </div>
   ${selectedSessions.length > 1 ? `<div class="audit-review-context">${selectedSessions.length} locations combined: ${escapeHtml(selectedSessions.map((session) => session.session_name).join(", "))}</div>` : ""}
   ${collectr.pendingCount || auditCollectrLoadRunning || auditCollectrLoadStopped ? `<div class="audit-review-progress"><span>${auditCollectrLoadStopped ? "Collectr check stopped" : auditCollectrLoadRunning ? "Collectr check running on VPS" : "Collectr check ready"} ${Number(collectr.loadedCount || 0)}/${Number((collectr.loadedCount || 0) + (collectr.pendingCount || 0))} loaded.</span>${auditCollectrLoadRunning ? `<button type="button" class="secondary compact-button" data-audit-action="stop-collectr-load">Stop</button>` : collectr.pendingCount ? `<button type="button" class="secondary compact-button" data-audit-action="start-collectr-load">Load Collectr</button>` : ""}</div>` : ""}
-  ${syncableRows.length || auditCollectrSyncAllRunning ? `<div class="audit-review-progress audit-review-bulk"><span>${auditCollectrSyncAllRunning ? "Sync all running " + auditCollectrSyncAllCompleted + "/" + auditCollectrSyncAllTotal + " synced" + (auditCollectrSyncAllFailed ? " · " + auditCollectrSyncAllFailed + " failed" : "") : syncableRows.length + " Collectr update" + (syncableRows.length === 1 ? "" : "s") + " ready"}</span>${syncableRows.length ? `<button type="button" class="secondary compact-button" data-audit-action="sync-all-collectr" ${auditCollectrSyncAllRunning ? "disabled" : ""}>Sync all</button>` : ""}</div>` : ""}
+  ${syncableRows.length || auditCollectrSyncAllRunning ? `<div class="audit-review-progress audit-review-bulk"><span>${auditCollectrSyncAllRunning ? (auditCollectrSyncAllStopRequested ? "Stopping sync all after current item" : "Sync all running " + auditCollectrSyncAllCompleted + "/" + auditCollectrSyncAllTotal + " synced" + (auditCollectrSyncAllFailed ? " · " + auditCollectrSyncAllFailed + " failed" : "")) : syncableRows.length + " Collectr update" + (syncableRows.length === 1 ? "" : "s") + " ready"}</span>${auditCollectrSyncAllRunning ? `<button type="button" class="secondary compact-button" data-audit-action="stop-sync-all-collectr" ${auditCollectrSyncAllStopRequested ? "disabled" : ""}>Stop</button>` : syncableRows.length ? `<button type="button" class="secondary compact-button" data-audit-action="sync-all-collectr">Sync all</button>` : ""}</div>` : ""}
   <div class="audit-review-list">
     ${visibleRows.length ? visibleRows.map((row) => {
       const item = row.item || {};
@@ -1103,12 +1104,14 @@ async function syncAllAuditCollectrRows() {
   if (!window.confirm("Sync " + rows.length + " Collectr update" + (rows.length === 1 ? "" : "s") + "?")) return;
 
   auditCollectrSyncAllRunning = true;
+  auditCollectrSyncAllStopRequested = false;
   auditCollectrSyncAllTotal = rows.length;
   auditCollectrSyncAllCompleted = 0;
   auditCollectrSyncAllFailed = 0;
   renderAuditSummary();
   try {
     for (const row of rows) {
+      if (auditCollectrSyncAllStopRequested) break;
       const cardId = row.cardId;
       const targetQuantity = Number(row.scannedCount || 0);
       try {
@@ -1119,7 +1122,10 @@ async function syncAllAuditCollectrRows() {
       }
       renderAuditSummary();
     }
-    if (auditCollectrSyncAllFailed) {
+    if (auditCollectrSyncAllStopRequested) {
+      setStatus("Collectr sync stopped", "success");
+      elements.cameraMessage.textContent = auditCollectrSyncAllCompleted + " synced. Sync all stopped before remaining updates.";
+    } else if (auditCollectrSyncAllFailed) {
       setErrorStatus("Collectr sync finished", auditCollectrSyncAllFailed + " Collectr update" + (auditCollectrSyncAllFailed === 1 ? "" : "s") + " failed after 3 attempts.");
       elements.cameraMessage.textContent = auditCollectrSyncAllCompleted + " synced. " + auditCollectrSyncAllFailed + " failed after 3 attempts.";
     } else {
@@ -1128,6 +1134,7 @@ async function syncAllAuditCollectrRows() {
     }
   } finally {
     auditCollectrSyncAllRunning = false;
+    auditCollectrSyncAllStopRequested = false;
     auditCollectrSyncAllTotal = 0;
     auditCollectrSyncAllCompleted = 0;
     auditCollectrSyncAllFailed = 0;
@@ -1802,6 +1809,15 @@ elements.auditSummaryPanel.addEventListener("click", async (event) => {
   const syncAllButton = event.target.closest("button[data-audit-action='sync-all-collectr']");
   if (syncAllButton) {
     void syncAllAuditCollectrRows();
+    return;
+  }
+  const stopSyncAllButton = event.target.closest("button[data-audit-action='stop-sync-all-collectr']");
+  if (stopSyncAllButton) {
+    auditCollectrSyncAllStopRequested = true;
+    stopSyncAllButton.disabled = true;
+    stopSyncAllButton.textContent = "Stopping";
+    renderAuditSummary();
+    elements.cameraMessage.textContent = "Sync all will stop after the current Collectr update finishes.";
     return;
   }
   const button = event.target.closest("button[data-audit-action='adjust-collectr']");
