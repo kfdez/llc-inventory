@@ -1030,13 +1030,17 @@ async function syncAuditCollectrReviewRow(cardId, targetQuantity, options = {}) 
 async function syncAllAuditCollectrRows() {
   if (auditCollectrSyncAllRunning) return;
   const rows = getSyncableAuditReviewRows();
-  if (!rows.length) return;
-  if (!window.confirm("Sync " + rows.length + " Collectr update" + (rows.length === 1 ? "" : "s") + "?")) return;
+  if (!rows.length) {
+    elements.cameraMessage.textContent = "No Collectr updates are ready to sync.";
+    return;
+  }
   if (!auditSummary || !auditSummary.session || !auditSummary.session.session_id) {
     setErrorStatus("Collectr sync error", "Audit session is required before syncing Collectr.");
     return;
   }
 
+  setStatus("Collectr sync starting", "success");
+  elements.cameraMessage.textContent = "Starting " + rows.length + " Collectr update" + (rows.length === 1 ? "" : "s") + " on the VPS.";
   auditCollectrSyncAllRunning = true;
   auditCollectrSyncAllStopRequested = false;
   auditCollectrSyncAllTotal = rows.length;
@@ -1060,6 +1064,7 @@ async function syncAllAuditCollectrRows() {
     }
     if (!startResponse.ok || !startData.ok) throw new Error(startData.error || "Unable to start Collectr sync job.");
     auditCollectrSyncJobId = startData.job && startData.job.id || "";
+    if (!auditCollectrSyncJobId) throw new Error("Collectr sync job did not return a job ID.");
     storageSet(localStorage, "auditCollectrSyncJobId", auditCollectrSyncJobId);
 
     for (const row of rows) {
@@ -1766,7 +1771,11 @@ elements.globalAuditModal.addEventListener("click", (event) => {
 elements.auditSummaryPanel.addEventListener("click", async (event) => {
   const syncAllButton = event.target.closest("button[data-audit-action='sync-all-collectr']");
   if (syncAllButton) {
-    void syncAllAuditCollectrRows();
+    event.preventDefault();
+    event.stopPropagation();
+    syncAllButton.disabled = true;
+    syncAllButton.textContent = "Starting";
+    await syncAllAuditCollectrRows();
     return;
   }
   const stopSyncAllButton = event.target.closest("button[data-audit-action='stop-sync-all-collectr']");
