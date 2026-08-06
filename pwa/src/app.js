@@ -440,12 +440,17 @@ function recomputeAuditSummaryTotals() {
 }
 
 function isAuditReviewRowSyncable(row) {
-  if (!row || !row.item || !row.collectrLoaded || row.collectrPending || row.collectrSyncing) return false;
+  if (!row || !row.item || row.collectrSyncing) return false;
   if (row.collectrSyncSkipped) return false;
-  if (row.collectrQuantity === null || row.collectrQuantity === undefined) return false;
   const targetQuantity = Number(row.scannedCount || 0);
-  return Number.isInteger(targetQuantity) && targetQuantity >= 0 &&
-    Number(row.collectrQuantity || 0) !== targetQuantity;
+  if (!Number.isInteger(targetQuantity) || targetQuantity < 0) return false;
+  if (row.collectrLoaded && row.collectrQuantity !== null && row.collectrQuantity !== undefined) {
+    return Number(row.collectrQuantity || 0) !== targetQuantity;
+  }
+  return Boolean(
+    row.item.collectrProductId ||
+    (row.item.setName && row.item.name && row.item.cardNumber)
+  );
 }
 
 function getSyncableAuditReviewRows() {
@@ -491,9 +496,10 @@ function renderAuditSummary() {
             ? row.collectrSyncStatus
           : row.collectrLoaded
             ? "Collectr " + (row.collectrQuantity ?? "-")
-            : "Collectr pending";
-      const canAdjustCollectr = row.item && row.collectrLoaded && row.collectrQuantity !== null &&
-        Number(row.collectrQuantity || 0) !== Number(row.scannedCount || 0) && !row.collectrSyncing;
+            : isAuditReviewRowSyncable(row)
+              ? "Collectr ready"
+              : "Collectr pending";
+      const canAdjustCollectr = isAuditReviewRowSyncable(row) && !row.collectrSyncing;
       const rowClass = [
         "audit-review-row",
         row.status === "match" ? "" : "issue",
@@ -737,7 +743,6 @@ async function loadAuditSummary(sessionId) {
   recomputeAuditSummaryTotals();
   saveAuditState();
   renderAuditState();
-  void loadAuditCollectrSummaryBatches(normalizedSessionId, loadVersion);
   return auditSummary;
 }
 
