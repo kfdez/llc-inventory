@@ -472,7 +472,9 @@ function getAuditSyncAllText() {
     return syncableRows.length + " Collectr update" + (syncableRows.length === 1 ? "" : "s") + " ready";
   }
   if (auditCollectrSyncAllStopRequested) return "Stopping sync all after current item";
-  return "Sync all running " + auditCollectrSyncAllCompleted + "/" + auditCollectrSyncAllTotal + " synced" +
+  const processed = auditCollectrSyncAllCompleted + auditCollectrSyncAllFailed;
+  return "Sync all running " + processed + "/" + auditCollectrSyncAllTotal + " processed | " +
+    auditCollectrSyncAllCompleted + " synced" +
     (auditCollectrSyncAllFailed ? " | " + auditCollectrSyncAllFailed + " failed" : "");
 }
 

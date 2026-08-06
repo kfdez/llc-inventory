@@ -10,7 +10,7 @@ const {
 } = require("./auditReviewService");
 
 const JOB_TYPE = "audit_collectr_sync";
-const BATCH_DELAY_MS = 1500;
+const BATCH_DELAY_MS = 5000;
 const MAX_ROW_ATTEMPTS = 3;
 const UNGRADED_GRADE_ID = "52";
 const FINGERPRINT_VERSION = 1;
@@ -104,13 +104,8 @@ class AuditCollectrSyncService {
       collectrUserOwnedProductId: row.collectrUserOwnedProductId || "",
       item: row.item || {}
     }));
+    this.cancelActiveJobs();
     const fingerprint = fingerprintPayload(sessionId, normalizedRows);
-    const existing = this.store.listJobs({ type: JOB_TYPE, limit: 200 }).find((job) =>
-      job.payload.sessionId === sessionId &&
-      job.payload.fingerprint === fingerprint &&
-      ["pending", "running"].includes(job.state)
-    );
-    if (existing) return this.serializeJob(existing);
 
     return this.serializeJob(this.store.createJob({
       type: JOB_TYPE,
@@ -129,6 +124,17 @@ class AuditCollectrSyncService {
         rowsById: {}
       }
     }));
+  }
+
+  cancelActiveJobs() {
+    this.store.listJobs({ type: JOB_TYPE, limit: 500 }).forEach((job) => {
+      if (["pending", "running"].includes(job.state)) {
+        this.store.updateJob(job.id, {
+          state: "canceled",
+          lockedUntilMs: 0
+        });
+      }
+    });
   }
 
   getJob(jobId) {
