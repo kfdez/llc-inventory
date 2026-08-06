@@ -321,6 +321,17 @@ test("global audit summary counts scans older than the audit status window", asy
             "KF-S-294067F5": {
               cardId: "KF-S-294067F5",
               name: "Mega ex",
+              sheetName: "Singles Inventory",
+              rowNumber: 1167,
+              portfolioName: "KF - Display Singles",
+              quantity: 11
+            },
+            "KF-S-0361B7CF": {
+              cardId: "KF-S-0361B7CF",
+              name: "Mega ex",
+              sheetName: "Singles Inventory",
+              rowNumber: 1167,
+              portfolioName: "KF - Display Singles",
               quantity: 11
             },
             "KYL-S-ABC12345": {
@@ -347,10 +358,12 @@ test("global audit summary counts scans older than the audit status window", asy
     }), env, {});
     const data = await response.json();
     const row = data.summary.rows.find((candidate) => candidate.cardId === "KF-S-294067F5");
+    const duplicateCurrentIdRow = data.summary.rows.find((candidate) => candidate.cardId === "KF-S-0361B7CF");
     assert.equal(response.status, 200);
     assert.equal(row.scannedCount, 1);
     assert.equal(row.sheetQuantity, 11);
     assert.equal(row.status, "short");
+    assert.equal(duplicateCurrentIdRow, undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }

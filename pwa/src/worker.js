@@ -1247,9 +1247,17 @@ function buildSheetAuditSummaryFromScans({ session, scans, selectedSessions = nu
   }
 
   if (includeUnscannedInventory && inventorySnapshot) {
+    const representedInventoryRows = new Set();
+    for (const group of grouped.values()) {
+      const item = group.item || getInventorySnapshotLookup(group.cardId, { allowStale: true })?.item || null;
+      const rowKey = item && item.sheetName && item.rowNumber ? item.sheetName + ":" + item.rowNumber : "";
+      if (rowKey) representedInventoryRows.add(rowKey);
+    }
+
     for (const [key, item] of inventorySnapshot.itemsById.entries()) {
       const sheetQuantity = Number(item && item.quantity || 0);
-      if (sheetQuantity <= 0 || grouped.has(key)) continue;
+      const rowKey = item && item.sheetName && item.rowNumber ? item.sheetName + ":" + item.rowNumber : "";
+      if (sheetQuantity <= 0 || grouped.has(key) || (rowKey && representedInventoryRows.has(rowKey))) continue;
       grouped.set(key, {
         cardId: item.cardId || key,
         scannedCount: 0,
