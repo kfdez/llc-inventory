@@ -161,6 +161,19 @@ function setErrorStatus(text, message) {
   setStatus(text, "error");
 }
 
+async function readApiJson(response, fallbackMessage) {
+  const text = await response.text();
+  try {
+    return JSON.parse(text || "{}");
+  } catch (_) {
+    throw new Error(
+      fallbackMessage + ": HTTP " + response.status +
+      ", content-type " + (response.headers.get("content-type") || "unknown") +
+      ", body " + text.replace(/\s+/g, " ").slice(0, 160)
+    );
+  }
+}
+
 function clearStatusError() {
   lastStatusError = "";
 }
@@ -1040,7 +1053,7 @@ async function syncAllAuditCollectrRows() {
         rows: rows.map(compactAuditCollectrSyncJobRow)
       })
     });
-    const startData = await startResponse.json();
+    const startData = await readApiJson(startResponse, "Collectr sync start returned an invalid response");
     if (startResponse.status === 401) {
       lock();
       throw new Error("Scanner PIN expired. Unlock the app again.");
@@ -1062,7 +1075,7 @@ async function syncAllAuditCollectrRows() {
       const response = await fetch("/api/audit/collectr-sync/status?jobId=" + encodeURIComponent(auditCollectrSyncJobId), {
         headers: { "X-App-Pin": pin }
       });
-      const data = await response.json();
+      const data = await readApiJson(response, "Collectr sync status returned an invalid response");
       if (response.status === 401) {
         lock();
         throw new Error("Scanner PIN expired. Unlock the app again.");
@@ -1089,6 +1102,16 @@ async function syncAllAuditCollectrRows() {
     } else {
       setStatus("Collectr sync complete", "success");
       elements.cameraMessage.textContent = auditCollectrSyncAllCompleted + " Collectr update" + (auditCollectrSyncAllCompleted === 1 ? "" : "s") + " synced.";
+    }
+  } catch (error) {
+    const message = error && error.message ? error.message : "Collectr sync failed.";
+    setErrorStatus("Collectr sync error", message);
+    elements.cameraMessage.textContent = message;
+    for (const row of rows) {
+      const current = getAuditSummaryRow(row.cardId);
+      if (current && current.collectrSyncing) {
+        applyAuditCollectrSyncError(row.cardId, message);
+      }
     }
   } finally {
     auditCollectrSyncAllRunning = false;
