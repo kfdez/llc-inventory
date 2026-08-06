@@ -391,7 +391,11 @@ async function collectrProxyJobRequest(env, path, options = {}) {
   try {
     data = JSON.parse(text || "{}");
   } catch (_) {
-    throw new Error("Collectr job proxy returned an invalid JSON response.");
+    throw new Error(
+      "Collectr job proxy returned an invalid JSON response: HTTP " + response.status +
+      ", content-type " + (response.headers.get("content-type") || "unknown") +
+      ", body " + text.replace(/\s+/g, " ").slice(0, 180)
+    );
   }
   if (!response.ok || !data.ok) {
     throw new Error(data.error || "Collectr job proxy request failed.");
