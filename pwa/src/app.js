@@ -957,6 +957,27 @@ function mergeAuditCollectrSyncRows(rows, options = {}) {
   if (options.render !== false) renderAuditState();
 }
 
+function releasePendingAuditCollectrSyncRows(rows, message) {
+  if (!auditSummary || !Array.isArray(auditSummary.rows)) return;
+  const completed = new Set();
+  for (const row of Array.isArray(auditSummary.rows) ? auditSummary.rows : []) {
+    if (!row.collectrSyncing) completed.add(String(row.cardId || "").toUpperCase());
+  }
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const key = String(row.cardId || "").toUpperCase();
+    const current = getAuditSummaryRow(key);
+    if (!current || !current.collectrSyncing || completed.has(key)) continue;
+    updateAuditReviewRow(key, {
+      collectrSyncing: false,
+      collectrSyncSkipped: false,
+      collectrError: "",
+      collectrSyncStatus: message || "Collectr sync stopped"
+    }, { render: false });
+  }
+  recomputeAuditSummaryTotals();
+  saveAuditState();
+}
+
 function compactAuditCollectrJobRow(row) {
   const item = row.item || {};
   return {
@@ -1123,6 +1144,9 @@ async function syncAllAuditCollectrRows() {
       if (["complete", "failed", "canceled"].includes(job.state)) {
         if (job.state === "canceled") auditCollectrSyncAllStopRequested = true;
         mergeAuditCollectrSyncRows(job.rows, { render: false });
+        if (job.state === "canceled") {
+          releasePendingAuditCollectrSyncRows(rows, "Collectr sync stopped");
+        }
         recomputeAuditSummaryTotals();
         saveAuditState();
         renderAuditSummary();
