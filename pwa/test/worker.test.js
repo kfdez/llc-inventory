@@ -318,14 +318,6 @@ test("global audit summary counts scans older than the audit status window", asy
         ok: true,
         snapshot: {
           itemsById: {
-            "KF-S-294067F5": {
-              cardId: "KF-S-294067F5",
-              name: "Mega ex",
-              sheetName: "Singles Inventory",
-              rowNumber: 1167,
-              portfolioName: "KF - Display Singles",
-              quantity: 11
-            },
             "KF-S-0361B7CF": {
               cardId: "KF-S-0361B7CF",
               name: "Mega ex",
@@ -358,12 +350,15 @@ test("global audit summary counts scans older than the audit status window", asy
     }), env, {});
     const data = await response.json();
     const row = data.summary.rows.find((candidate) => candidate.cardId === "KF-S-294067F5");
-    const duplicateCurrentIdRow = data.summary.rows.find((candidate) => candidate.cardId === "KF-S-0361B7CF");
+    const currentIdRow = data.summary.rows.find((candidate) => candidate.cardId === "KF-S-0361B7CF");
     assert.equal(response.status, 200);
     assert.equal(row.scannedCount, 1);
-    assert.equal(row.sheetQuantity, 11);
-    assert.equal(row.status, "short");
-    assert.equal(duplicateCurrentIdRow, undefined);
+    assert.equal(row.sheetQuantity, 0);
+    assert.equal(row.status, "not-in-sheet");
+    assert.equal(row.item, null);
+    assert.equal(currentIdRow.scannedCount, 0);
+    assert.equal(currentIdRow.sheetQuantity, 11);
+    assert.equal(currentIdRow.status, "unscanned");
   } finally {
     globalThis.fetch = originalFetch;
   }
