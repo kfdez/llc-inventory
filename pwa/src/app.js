@@ -898,6 +898,12 @@ function updateAuditReviewRow(cardId, patch) {
   renderAuditState();
 }
 
+function getAuditSummaryRow(cardId) {
+  if (!auditSummary || !Array.isArray(auditSummary.rows)) return null;
+  const key = String(cardId || "").toUpperCase();
+  return auditSummary.rows.find((row) => String(row.cardId || "").toUpperCase() === key) || null;
+}
+
 function applyAuditCollectrSyncSuccess(cardId, targetQuantity, data) {
   const result = data && data.result || {};
   const collectr = result.collectr || {};
@@ -1021,7 +1027,8 @@ async function loadAuditCollectrSummaryBatches(sessionId, loadVersion = auditSum
   }
 }
 
-async function adjustCollectrQuantityFromAudit(cardId, targetQuantity) {
+async function adjustCollectrQuantityFromAudit(row, targetQuantity) {
+  const cardId = row && row.cardId || "";
   const quantity = Number(targetQuantity);
   if (!Number.isInteger(quantity) || quantity < 0) {
     throw new Error("Target quantity must be a non-negative integer.");
@@ -1029,7 +1036,17 @@ async function adjustCollectrQuantityFromAudit(cardId, targetQuantity) {
   const response = await fetch("/api/collectr/quantity", {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-App-Pin": pin },
-    body: JSON.stringify({ cardId, targetQuantity: quantity })
+    body: JSON.stringify({
+      cardId,
+      targetQuantity: quantity,
+      collectr: {
+        portfolioName: row.collectrPortfolioName || "",
+        productId: row.collectrProductId || "",
+        subType: row.collectrSubType || "",
+        gradeId: row.collectrGradeId || "",
+        userOwnedProductId: row.collectrUserOwnedProductId || ""
+      }
+    })
   });
   const data = await response.json();
   if (response.status === 401) {
@@ -1048,6 +1065,8 @@ async function syncAuditCollectrReviewRow(cardId, targetQuantity, options = {}) 
   const maxAttempts = Number(options.maxAttempts || 1);
   let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const row = getAuditSummaryRow(cardId);
+    if (!row) throw new Error("Audit review row was not found.");
     updateAuditReviewRow(cardId, {
       collectrSyncing: true,
       collectrSyncSkipped: false,
@@ -1055,7 +1074,7 @@ async function syncAuditCollectrReviewRow(cardId, targetQuantity, options = {}) 
       collectrSyncStatus: "Collectr syncing" + (attempt > 1 ? " (retry " + attempt + "/" + maxAttempts + ")" : "")
     });
     try {
-      const data = await adjustCollectrQuantityFromAudit(cardId, targetQuantity);
+      const data = await adjustCollectrQuantityFromAudit(row, targetQuantity);
       applyAuditCollectrSyncSuccess(cardId, targetQuantity, data);
       return data;
     } catch (error) {

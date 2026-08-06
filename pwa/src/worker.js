@@ -963,8 +963,17 @@ async function adjustCollectrQuantity(request, env) {
     if (!item) {
       return json({ ok: false, error: "No spreadsheet row matched " + cardId + "." }, 404);
     }
-    const result = await setCollectrItemQuantity(env, item, targetQuantity);
-    return json({ ok: true, item, result });
+    const collectr = payload.collectr && typeof payload.collectr === "object" ? payload.collectr : {};
+    const resolvedItem = {
+      ...item,
+      portfolioName: collectr.portfolioName || item.portfolioName || "",
+      collectrProductId: collectr.productId || item.collectrProductId || "",
+      collectrSubType: collectr.subType || item.collectrSubType || "",
+      collectrGradeId: collectr.gradeId || item.collectrGradeId || "",
+      collectrUserOwnedProductId: collectr.userOwnedProductId || item.collectrUserOwnedProductId || ""
+    };
+    const result = await setCollectrItemQuantity(env, resolvedItem, targetQuantity);
+    return json({ ok: true, item: resolvedItem, result });
   } catch (error) {
     return json({ ok: false, error: "Collectr quantity update failed: " + error.message }, 502);
   }
@@ -1141,6 +1150,9 @@ async function enrichAuditSummaryWithCollectr(env, summary) {
         next.collectrDifference = Number(row.scannedCount || 0) - Number(resolved.collectr.currentQuantity || 0);
         next.collectrPortfolioName = resolved.portfolio.name;
         next.collectrProductId = resolved.product.id;
+        next.collectrSubType = resolved.product.subType;
+        next.collectrGradeId = resolved.product.gradeId;
+        next.collectrUserOwnedProductId = resolved.product.userOwnedProductId;
         next.collectrWarnings = resolved.warnings;
       } catch (error) {
         next.collectrError = error.message;

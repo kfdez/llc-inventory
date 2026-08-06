@@ -265,6 +265,9 @@ class AuditCollectrReviewService {
       collectrDifference: Number(row.scannedCount || 0) - Number(resolved.collectr.currentQuantity || 0),
       collectrPortfolioName: resolved.portfolio.name,
       collectrProductId: resolved.product.id,
+      collectrSubType: resolved.product.subType,
+      collectrGradeId: resolved.product.gradeId,
+      collectrUserOwnedProductId: resolved.product.userOwnedProductId,
       collectrWarnings: resolved.warnings,
       collectrLoaded: true,
       collectrPending: false
