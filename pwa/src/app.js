@@ -179,6 +179,10 @@ function clearStatusError() {
   lastStatusError = "";
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function authenticatedFetch(url, options = {}) {
   const timeoutMs = Number(options.timeoutMs || 0);
   const fetchOptions = { ...options };
@@ -1091,7 +1095,7 @@ async function syncAllAuditCollectrRows() {
   }
 
   setStatus("Collectr sync starting", "success");
-  elements.cameraMessage.textContent = "Starting " + rows.length + " Collectr update" + (rows.length === 1 ? "" : "s") + " on the VPS.";
+  elements.cameraMessage.textContent = "Starting " + rows.length + " Collectr update" + (rows.length === 1 ? "" : "s") + " one row at a time.";
   auditCollectrSyncAllRunning = true;
   auditCollectrSyncAllStopRequested = false;
   auditCollectrSyncAllTotal = rows.length;
@@ -1099,66 +1103,22 @@ async function syncAllAuditCollectrRows() {
   auditCollectrSyncAllFailed = 0;
   auditCollectrSyncAllRetry = 0;
   auditCollectrSyncJobId = "";
+  storageRemove(localStorage, "auditCollectrSyncJobId");
   renderAuditSummary();
   try {
-    const startResponse = await fetch("/api/audit/collectr-sync/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-App-Pin": pin },
-      body: JSON.stringify({
-        sessionId: auditSummary.session.session_id,
-        rows: rows.map(compactAuditCollectrSyncJobRow)
-      })
-    });
-    const startData = await readApiJson(startResponse, "Collectr sync start returned an invalid response");
-    if (startResponse.status === 401) {
-      lock();
-      throw new Error("Scanner PIN expired. Unlock the app again.");
-    }
-    if (!startResponse.ok || !startData.ok) throw new Error(startData.error || "Unable to start Collectr sync job.");
-    auditCollectrSyncJobId = startData.job && startData.job.id || "";
-    if (!auditCollectrSyncJobId) throw new Error("Collectr sync job did not return a job ID.");
-    storageSet(localStorage, "auditCollectrSyncJobId", auditCollectrSyncJobId);
-
     for (const row of rows) {
-      updateAuditReviewRow(row.cardId, {
-        collectrSyncing: true,
-        collectrSyncSkipped: false,
-        collectrError: "",
-        collectrSyncStatus: "Collectr queued on VPS"
-      }, { render: false });
-    }
-    recomputeAuditSummaryTotals();
-    saveAuditState();
-    renderAuditSummary();
-
-    while (auditCollectrSyncJobId) {
-      const response = await fetch("/api/audit/collectr-sync/status?jobId=" + encodeURIComponent(auditCollectrSyncJobId), {
-        headers: { "X-App-Pin": pin }
-      });
-      const data = await readApiJson(response, "Collectr sync status returned an invalid response");
-      if (response.status === 401) {
-        lock();
-        throw new Error("Scanner PIN expired. Unlock the app again.");
+      if (auditCollectrSyncAllStopRequested) break;
+      try {
+        await syncAuditCollectrReviewRow(row.cardId, Number(row.scannedCount || 0), {
+          maxAttempts: 1,
+          skippedOnFail: true
+        });
+        auditCollectrSyncAllCompleted += 1;
+      } catch (_) {
+        auditCollectrSyncAllFailed += 1;
       }
-      if (!response.ok || !data.ok) throw new Error(data.error || "Unable to load Collectr sync job.");
-      const job = data.job || {};
-      mergeAuditCollectrSyncRows(job.rows, { render: false });
-      auditCollectrSyncAllCompleted = Number(job.completed || 0);
-      auditCollectrSyncAllFailed = Number(job.failed || 0);
-      auditCollectrSyncAllRetry = Number(job.retry || 0);
       renderAuditSyncProgress();
-      if (["complete", "failed", "canceled"].includes(job.state)) {
-        if (job.state === "canceled") auditCollectrSyncAllStopRequested = true;
-        mergeAuditCollectrSyncRows(job.rows, { render: false });
-        if (job.state === "canceled") {
-          releasePendingAuditCollectrSyncRows(rows, "Collectr sync stopped");
-        }
-        recomputeAuditSummaryTotals();
-        saveAuditState();
-        renderAuditSummary();
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await sleep(4000);
     }
 
     if (auditCollectrSyncAllStopRequested) {
@@ -1850,18 +1810,8 @@ elements.auditSummaryPanel.addEventListener("click", async (event) => {
     auditCollectrSyncAllStopRequested = true;
     stopSyncAllButton.disabled = true;
     stopSyncAllButton.textContent = "Stopping";
-    const jobId = auditCollectrSyncJobId;
-    if (jobId) {
-      try {
-        await fetch("/api/audit/collectr-sync/stop", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-App-Pin": pin },
-          body: JSON.stringify({ jobId })
-        });
-      } catch (_) {}
-    }
-    renderAuditSummary();
-    elements.cameraMessage.textContent = "Sync all will stop after the current Collectr update finishes.";
+    renderAuditSyncProgress();
+    elements.cameraMessage.textContent = "Sync all will stop after the current row finishes.";
     return;
   }
   const button = event.target.closest("button[data-audit-action='adjust-collectr']");
