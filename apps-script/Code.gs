@@ -338,6 +338,18 @@ function getInventoryIdColumnIndexes_(headers, preferredIdColumnIndex) {
     "Generated ID",
     "Card ID",
     "card_id",
+    "Legacy Card ID",
+    "Legacy Card IDs",
+    "legacy_card_id",
+    "legacy_card_ids",
+    "Old Card ID",
+    "Old Card IDs",
+    "old_card_id",
+    "old_card_ids",
+    "Previous Card ID",
+    "Previous Card IDs",
+    "previous_card_id",
+    "previous_card_ids",
     "ID",
     "id",
     "Inventory ID",
@@ -347,10 +359,6 @@ function getInventoryIdColumnIndexes_(headers, preferredIdColumnIndex) {
   ];
   const indexes = [];
 
-  if (preferredIdColumnIndex) {
-    indexes.push(preferredIdColumnIndex - 1);
-  }
-
   candidates.forEach(function (candidate) {
     const headerIndex = getHeaderIndexByCandidates_(headers, [candidate]);
     if (headerIndex !== -1 && indexes.indexOf(headerIndex) === -1) {
@@ -358,15 +366,26 @@ function getInventoryIdColumnIndexes_(headers, preferredIdColumnIndex) {
     }
   });
 
+  if (!indexes.length && preferredIdColumnIndex) {
+    indexes.push(preferredIdColumnIndex - 1);
+  }
+
   return indexes;
+}
+
+function splitInventoryCardIds_(value) {
+  return String(value || "")
+    .split(/[\n,;]+/)
+    .map(function (cardId) { return String(cardId || "").trim(); })
+    .filter(Boolean);
 }
 
 function getInventoryIdFromRow_(row, headers, preferredIdColumnIndex) {
   const idColumnIndexes = getInventoryIdColumnIndexes_(headers, preferredIdColumnIndex);
   for (let index = 0; index < idColumnIndexes.length; index += 1) {
-    const value = String(row[idColumnIndexes[index]] || "").trim();
-    if (value) {
-      return value;
+    const values = splitInventoryCardIds_(row[idColumnIndexes[index]]);
+    if (values.length) {
+      return values[0];
     }
   }
   return "";
@@ -390,23 +409,23 @@ function findInventoryRowByIdInSheet_(sheetName, cardId, preferredIdColumnIndex)
 
   for (let index = 0; index < idColumnIndexes.length; index += 1) {
     const columnIndex = idColumnIndexes[index];
-    const match = sheet
-      .getRange(2, columnIndex + 1, lastRow - 1, 1)
-      .createTextFinder(normalizedCardId)
-      .matchEntireCell(true)
-      .matchCase(false)
-      .findNext();
+    const values = sheet.getRange(2, columnIndex + 1, lastRow - 1, 1).getValues();
 
-    if (match) {
-      const rowNumber = match.getRow();
-      return {
-        sheet: sheet,
-        sheetName: sheetName,
-        category: sheetName === SLABS_INVENTORY_SHEET ? "Slabs" : "Singles",
-        rowNumber: rowNumber,
-        row: sheet.getRange(rowNumber, 1, 1, lastColumn).getValues()[0],
-        headers: headers
-      };
+    for (let rowIndex = 0; rowIndex < values.length; rowIndex += 1) {
+      const cardIds = splitInventoryCardIds_(values[rowIndex][0]);
+      if (cardIds.some(function (candidate) {
+        return candidate.toUpperCase() === normalizedCardId.toUpperCase();
+      })) {
+        const rowNumber = rowIndex + 2;
+        return {
+          sheet: sheet,
+          sheetName: sheetName,
+          category: sheetName === SLABS_INVENTORY_SHEET ? "Slabs" : "Singles",
+          rowNumber: rowNumber,
+          row: sheet.getRange(rowNumber, 1, 1, lastColumn).getValues()[0],
+          headers: headers
+        };
+      }
     }
   }
 
@@ -512,10 +531,12 @@ function getInventoryLookupSnapshot_() {
 
       const cardIds = [];
       idColumnIndexes.forEach(function (columnIndex) {
-        const cardId = String(row[columnIndex] || "").trim();
-        if (cardId && cardIds.indexOf(cardId) === -1) {
+        splitInventoryCardIds_(row[columnIndex]).forEach(function (cardId) {
+          if (cardIds.indexOf(cardId) !== -1) {
+            return;
+          }
           cardIds.push(cardId);
-        }
+        });
       });
       if (!cardIds.length) {
         continue;
