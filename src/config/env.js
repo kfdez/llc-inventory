@@ -38,6 +38,8 @@ function loadConfig() {
   const discordEnabled = booleanEnv("DISCORD_ENABLED", !legacyDryRun);
   const appsScriptDryRun = booleanEnv("APPS_SCRIPT_DRY_RUN", legacyDryRun);
   const sqlitePath = path.resolve(process.cwd(), optionalEnv("SQLITE_PATH", "./data/llc-inventory-v2.sqlite"));
+  const collectrProxyEnabled = booleanEnv("COLLECTR_PROXY_ENABLED", false);
+  const collectrRelayBaseUrl = optionalEnv("COLLECTR_RELAY_BASE_URL");
 
   return {
     env: optionalEnv("NODE_ENV", "development"),
@@ -73,14 +75,16 @@ function loadConfig() {
       detectorConfidence: Number(optionalEnv("LABEL_DETECTOR_CONF", "0.2")) || 0.2
     },
     collectrProxy: {
-      enabled: booleanEnv("COLLECTR_PROXY_ENABLED", false),
+      enabled: collectrProxyEnabled,
       host: optionalEnv("COLLECTR_PROXY_HOST", "127.0.0.1"),
       port: numberEnv("COLLECTR_PROXY_PORT", 8788),
-      secret: requireWhenEnabled("COLLECTR_PROXY_SECRET", booleanEnv("COLLECTR_PROXY_ENABLED", false)),
-      accountId: requireWhenEnabled("COLLECTR_ACCOUNT_ID", booleanEnv("COLLECTR_PROXY_ENABLED", false)),
-      authToken: requireWhenEnabled("COLLECTR_AUTH_TOKEN", booleanEnv("COLLECTR_PROXY_ENABLED", false)),
+      secret: requireWhenEnabled("COLLECTR_PROXY_SECRET", collectrProxyEnabled),
+      accountId: requireWhenEnabled("COLLECTR_ACCOUNT_ID", collectrProxyEnabled),
+      authToken: requireWhenEnabled("COLLECTR_AUTH_TOKEN", collectrProxyEnabled && !collectrRelayBaseUrl),
       apiBaseUrl: optionalEnv("COLLECTR_API_BASE_URL", "https://api-v2.getcollectr.com"),
-      requestTimeoutMs: numberEnv("COLLECTR_PROXY_REQUEST_TIMEOUT_MS", 30000)
+      requestTimeoutMs: numberEnv("COLLECTR_PROXY_REQUEST_TIMEOUT_MS", 30000),
+      relayBaseUrl: collectrRelayBaseUrl,
+      relaySecret: requireWhenEnabled("COLLECTR_RELAY_SECRET", collectrProxyEnabled && Boolean(collectrRelayBaseUrl))
     }
   };
 }

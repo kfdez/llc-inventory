@@ -35,6 +35,7 @@ npm run db:init
 npm test
 npm run demo:capture
 npm run demo:analyze -- ".\test-assets\test-qr-single.png"
+npm run collectr:relay
 npm start
 ```
 
@@ -54,6 +55,26 @@ LABEL_DETECTOR_DEVICE=cpu
 
 The detector is optional. If it is disabled, or if it fails, v2 can still fall
 back to full-image QR decoding.
+
+## Local Collectr Relay
+
+If Collectr blocks the VPS IP, run Collectr API traffic from this PC instead:
+
+```powershell
+npm run collectr:relay
+.\.tools\cloudflared.exe tunnel --url http://127.0.0.1:8790
+```
+
+Set these on the VPS service:
+
+```text
+COLLECTR_RELAY_BASE_URL=https://your-quick-tunnel.trycloudflare.com
+COLLECTR_RELAY_SECRET=shared-relay-secret
+```
+
+The relay only exposes `/health` and `/collectr/relay`, requires the relay
+secret for Collectr calls, and keeps the same Collectr path allowlist as the VPS
+proxy.
 
 ## PWA
 

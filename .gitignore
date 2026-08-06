@@ -4,6 +4,7 @@ data/
 logs/
 captures/
 .runtime/
+.tools/
 .venv/
 __pycache__/
 *.log

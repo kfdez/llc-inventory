@@ -25,7 +25,68 @@ function buildCollectrUrl(config, path, query = {}) {
   return url;
 }
 
+function buildRelayUrl(config) {
+  const base = String(config.relayBaseUrl || "").trim();
+  if (!base) return null;
+  const normalizedBase = base.endsWith("/") ? base : base + "/";
+  return new URL("collectr/relay", normalizedBase);
+}
+
+async function fetchRelayJson(config, path, query = {}, options = {}) {
+  const relayUrl = buildRelayUrl(config);
+  if (!relayUrl) return null;
+  if (!isAllowedCollectrPath(String(path || "").trim())) {
+    throw new Error("Collectr path is not allowed.");
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);
+  const method = String(options.method || "GET").toUpperCase();
+  try {
+    const response = await fetch(relayUrl, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Collectr-Relay-Secret": config.relaySecret || ""
+      },
+      body: JSON.stringify({
+        path,
+        query,
+        method,
+        body: options.body || {}
+      })
+    });
+    const text = await response.text();
+    let data;
+    try {
+      data = JSON.parse(text || "{}");
+    } catch (_) {
+      const error = new Error(
+        "Collectr relay returned non-JSON: HTTP " + response.status +
+        ", content-type " + (response.headers.get("content-type") || "unknown")
+      );
+      error.status = response.status;
+      throw error;
+    }
+    if (!response.ok || data.ok === false) {
+      const error = new Error(data.error || "Collectr relay request failed with HTTP " + response.status + ".");
+      error.status = data.upstreamStatus || response.status;
+      error.response = data;
+      throw error;
+    }
+    return data.data;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function fetchCollectrJson(config, path, query = {}, options = {}) {
+  if (buildRelayUrl(config)) {
+    return fetchRelayJson(config, path, query, options);
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);
   const method = String(options.method || "GET").toUpperCase();
