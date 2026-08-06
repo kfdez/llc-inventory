@@ -101,7 +101,12 @@ function startLocalCollectrRelay({ config, logger }) {
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
     if (url.pathname === "/health") {
-      sendJson(response, 200, { ok: true });
+      sendJson(response, 200, {
+        ok: true,
+        relay: "local-collectr",
+        requestDelayMs: config.requestDelayMs,
+        browserHeaders: true
+      });
       return;
     }
     if (url.pathname !== "/collectr/relay") {

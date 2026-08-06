@@ -94,6 +94,8 @@ async function fetchRelayJson(config, path, query = {}, options = {}) {
     if (!response.ok || data.ok === false) {
       const error = new Error(data.error || "Collectr relay request failed with HTTP " + response.status + ".");
       error.status = data.upstreamStatus || response.status;
+      error.collectrPath = path;
+      error.collectrMethod = method;
       error.response = data;
       throw error;
     }
@@ -128,11 +130,15 @@ async function fetchCollectrJson(config, path, query = {}, options = {}) {
         ", content-type " + (response.headers.get("content-type") || "unknown")
       );
       error.status = response.status;
+      error.collectrPath = path;
+      error.collectrMethod = method;
       throw error;
     }
     if (!response.ok) {
       const error = new Error(data.error || data.message || "Collectr request failed with HTTP " + response.status + ".");
       error.status = response.status;
+      error.collectrPath = path;
+      error.collectrMethod = method;
       error.response = data;
       throw error;
     }

@@ -191,13 +191,18 @@ class AuditCollectrReviewService {
         resolvedRow = await this.enrichRow(nextRow);
       } catch (error) {
         if (isForbiddenCollectrError(error)) {
-          const message = "Collectr returned HTTP 403 and blocked the audit review. Stop for now, then try again later or refresh the Collectr token.";
+          const message = "Collectr returned HTTP 403 and blocked the audit review. Stop for now, then try again later or use the local relay/browser path.";
           this.store.updateJob(job.id, {
             state: "failed",
             error: message,
             result: this.withTotals(job.payload, {
               ...result,
-              errors: (result.errors || []).concat([{ cardId: nextRow.cardId, error: message }]),
+              errors: (result.errors || []).concat([{
+                cardId: nextRow.cardId,
+                error: message,
+                collectrPath: error.collectrPath || "",
+                collectrMethod: error.collectrMethod || ""
+              }]),
               rowsById,
               loaded: Object.keys(rowsById).length
             }),
@@ -299,39 +304,52 @@ class AuditCollectrReviewService {
   async resolveProduct(item, portfolio) {
     const directId = String(item.collectrProductId || "").trim();
     const subtype = item.collectrSubType || item.variance || "";
-    if (directId) {
-      return {
-        product: { id: directId, product_sub_type: subtype, grade_id: item.collectrGradeId || "" },
-        warnings: []
-      };
-    }
-    const searchString = [item.setName, item.name, item.cardNumber].filter(Boolean).join("\t");
-    const catalog = selectDataArray(await fetchCollectrJson(this.config, "/catalog", { searchString }));
     const expectedSet = normalizeValue(item.setName);
     const expectedName = normalizeValue(item.name);
     const expectedNumber = normalizeValue(item.cardNumber);
     const expectedSubtype = normalizeValue(subtype);
-    const matches = catalog.filter((product) =>
+    const collectionId = portfolio.id || portfolio.collection_id;
+    if (directId) {
+      const ownedRows = selectDataArray(await fetchCollectrJson(this.config, "/collections/" + encodeURIComponent(this.config.accountId) + "/products", {
+        collectionId,
+        productIds: directId,
+        unstackedView: true,
+        currency: "CAD"
+      }));
+      const selected = ownedRows.find((line) => !expectedSubtype || normalizeValue(line.product_sub_type) === expectedSubtype) || ownedRows[0] || {};
+      return {
+        product: {
+          id: directId,
+          subType: selected.product_sub_type || subtype,
+          gradeId: selected.grade_id || item.collectrGradeId || "",
+          userOwnedProductId: selected.user_owned_product_id || "",
+          quantity: selected.quantity || 0
+        },
+        warnings: []
+      };
+    }
+    const ownedRows = selectDataArray(await fetchCollectrJson(this.config, "/collections/" + encodeURIComponent(this.config.accountId) + "/products", {
+      collectionId,
+      unstackedView: true,
+      currency: "CAD",
+      limit: 1000
+    }));
+    const matches = ownedRows.filter((product) =>
       normalizeValue(product.catalog_group || product.set_name || product.group_name) === expectedSet &&
       normalizeValue(product.product_name || product.name) === expectedName &&
       normalizeValue(product.card_number || product.number) === expectedNumber &&
       (!expectedSubtype || normalizeValue(product.product_sub_type || product.sub_type || product.subType) === expectedSubtype)
     );
-    const product = matches[0] || catalog[0];
+    const product = matches[0];
     if (!product) throw new Error("Collectr product not found for " + (item.name || item.cardId) + ".");
     const productId = String(product.product_id || product.id || "").trim();
     if (!productId) throw new Error("Collectr product match did not include an ID.");
-    const ownedRows = selectDataArray(await fetchCollectrJson(this.config, "/collections/" + encodeURIComponent(this.config.accountId) + "/products", {
-      collectionId: portfolio.id || portfolio.collection_id,
-      productIds: productId,
-      currency: "USD"
-    }));
     const detailRows = flattenProductDetailLines(await fetchCollectrJson(this.config, "/collections/" + encodeURIComponent(this.config.accountId) + "/products/" + encodeURIComponent(productId), {
-      collectionId: portfolio.id || portfolio.collection_id,
-      currency: "USD",
+      collectionId,
+      currency: "CAD",
       details: "false"
     }));
-    const lines = detailRows.length ? detailRows : ownedRows;
+    const lines = detailRows.length ? detailRows : matches;
     const selected = lines.find((line) => !expectedSubtype || normalizeValue(line.product_sub_type) === expectedSubtype) || lines[0] || {};
     return {
       product: {
