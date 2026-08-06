@@ -466,6 +466,29 @@ function getSyncableAuditReviewRows() {
   return auditSummary.rows.filter(isAuditReviewRowSyncable);
 }
 
+function getAuditSyncAllText() {
+  if (!auditCollectrSyncAllRunning) {
+    const syncableRows = getSyncableAuditReviewRows();
+    return syncableRows.length + " Collectr update" + (syncableRows.length === 1 ? "" : "s") + " ready";
+  }
+  if (auditCollectrSyncAllStopRequested) return "Stopping sync all after current item";
+  return "Sync all running " + auditCollectrSyncAllCompleted + "/" + auditCollectrSyncAllTotal + " synced" +
+    (auditCollectrSyncAllFailed ? " | " + auditCollectrSyncAllFailed + " failed" : "");
+}
+
+function renderAuditSyncProgress() {
+  const progress = elements.auditSummaryPanel.querySelector("[data-audit-sync-progress]");
+  if (!progress) return;
+  const text = progress.querySelector("[data-audit-sync-text]");
+  const fill = progress.querySelector("[data-audit-sync-fill]");
+  if (text) text.textContent = getAuditSyncAllText();
+  if (fill) {
+    const processed = auditCollectrSyncAllCompleted + auditCollectrSyncAllFailed;
+    const percent = auditCollectrSyncAllTotal ? Math.min(100, Math.round(processed / auditCollectrSyncAllTotal * 100)) : 0;
+    fill.style.width = percent + "%";
+  }
+}
+
 function renderAuditSummary() {
   if (!auditSummary) {
     elements.auditSummaryPanel.hidden = true;
@@ -486,7 +509,7 @@ function renderAuditSummary() {
     <div><span>Collectr qty</span><strong>${Number(totals.collectrQuantity || 0)}</strong></div>
   </div>
   ${selectedSessions.length > 1 ? `<div class="audit-review-context">${selectedSessions.length} locations combined: ${escapeHtml(selectedSessions.map((session) => session.session_name).join(", "))}</div>` : ""}
-  ${syncableRows.length || auditCollectrSyncAllRunning ? `<div class="audit-review-progress audit-review-bulk"><span>${auditCollectrSyncAllRunning ? (auditCollectrSyncAllStopRequested ? "Stopping sync all after current item" : "Sync all running " + auditCollectrSyncAllCompleted + "/" + auditCollectrSyncAllTotal + " synced" + (auditCollectrSyncAllFailed ? " · " + auditCollectrSyncAllFailed + " failed" : "")) : syncableRows.length + " Collectr update" + (syncableRows.length === 1 ? "" : "s") + " ready"}</span>${auditCollectrSyncAllRunning ? `<button type="button" class="secondary compact-button" data-audit-action="stop-sync-all-collectr" ${auditCollectrSyncAllStopRequested ? "disabled" : ""}>Stop</button>` : syncableRows.length ? `<button type="button" class="secondary compact-button" data-audit-action="sync-all-collectr">Sync all</button>` : ""}</div>` : ""}
+  ${syncableRows.length || auditCollectrSyncAllRunning ? `<div class="audit-review-progress audit-review-bulk" data-audit-sync-progress><div class="audit-review-progress-copy"><span data-audit-sync-text>${escapeHtml(getAuditSyncAllText())}</span>${auditCollectrSyncAllRunning ? `<div class="audit-review-progress-bar"><i data-audit-sync-fill style="width: ${auditCollectrSyncAllTotal ? Math.min(100, Math.round((auditCollectrSyncAllCompleted + auditCollectrSyncAllFailed) / auditCollectrSyncAllTotal * 100)) : 0}%"></i></div>` : ""}</div>${auditCollectrSyncAllRunning ? `<button type="button" class="secondary compact-button" data-audit-action="stop-sync-all-collectr" ${auditCollectrSyncAllStopRequested ? "disabled" : ""}>Stop</button>` : syncableRows.length ? `<button type="button" class="secondary compact-button" data-audit-action="sync-all-collectr">Sync all</button>` : ""}</div>` : ""}
   <div class="audit-review-list">
     ${visibleRows.length ? visibleRows.map((row) => {
       const item = row.item || {};
@@ -846,7 +869,7 @@ function cancelAuditCollectrLoading(options = {}) {
   }
 }
 
-function updateAuditReviewRow(cardId, patch) {
+function updateAuditReviewRow(cardId, patch, options = {}) {
   if (!auditSummary || !Array.isArray(auditSummary.rows)) return;
   const key = String(cardId || "").toUpperCase();
   auditSummary.rows = auditSummary.rows.map((row) => {
@@ -857,7 +880,7 @@ function updateAuditReviewRow(cardId, patch) {
   });
   recomputeAuditSummaryTotals();
   saveAuditState();
-  renderAuditState();
+  if (options.render !== false) renderAuditState();
 }
 
 function getAuditSummaryRow(cardId) {
@@ -866,7 +889,7 @@ function getAuditSummaryRow(cardId) {
   return auditSummary.rows.find((row) => String(row.cardId || "").toUpperCase() === key) || null;
 }
 
-function applyAuditCollectrSyncSuccess(cardId, targetQuantity, data) {
+function applyAuditCollectrSyncSuccess(cardId, targetQuantity, data, options = {}) {
   const result = data && data.result || {};
   const collectr = result.collectr || {};
   const currentQuantity = Number(collectr.currentQuantity ?? targetQuantity);
@@ -880,7 +903,7 @@ function applyAuditCollectrSyncSuccess(cardId, targetQuantity, data) {
     collectrPortfolioName: result.portfolio && result.portfolio.name || "",
     collectrProductId: result.product && result.product.id || "",
     collectrSyncStatus: "Collectr updated to " + currentQuantity
-  });
+  }, options);
 }
 
 function applyAuditCollectrSyncError(cardId, message, options = {}) {
@@ -890,7 +913,7 @@ function applyAuditCollectrSyncError(cardId, message, options = {}) {
     collectrSyncSkipped: Boolean(options.skipped),
     collectrError: message,
     collectrSyncStatus: ""
-  });
+  }, options);
 }
 
 function compactAuditCollectrSyncJobRow(row) {
@@ -907,7 +930,7 @@ function compactAuditCollectrSyncJobRow(row) {
   };
 }
 
-function mergeAuditCollectrSyncRows(rows) {
+function mergeAuditCollectrSyncRows(rows, options = {}) {
   if (!auditSummary || !Array.isArray(auditSummary.rows)) return;
   for (const row of Array.isArray(rows) ? rows : []) {
     const status = String(row.status || "");
@@ -918,17 +941,20 @@ function mergeAuditCollectrSyncRows(rows) {
           product: { id: row.collectrProductId || "" },
           collectr: { currentQuantity: Number(row.collectrQuantity || row.targetQuantity || 0) }
         }
-      });
+      }, { render: false });
     } else if (status === "failed") {
-      applyAuditCollectrSyncError(row.cardId, row.error || "Collectr sync failed.", { skipped: true });
+      applyAuditCollectrSyncError(row.cardId, row.error || "Collectr sync failed.", { skipped: true, render: false });
     } else if (status === "retry") {
       updateAuditReviewRow(row.cardId, {
         collectrSyncing: true,
         collectrSyncStatus: "Collectr retry queued" + (row.attempts ? " (" + row.attempts + "/3)" : ""),
         collectrError: row.error || ""
-      });
+      }, { render: false });
     }
   }
+  recomputeAuditSummaryTotals();
+  saveAuditState();
+  if (options.render !== false) renderAuditState();
 }
 
 function compactAuditCollectrJobRow(row) {
@@ -1073,8 +1099,11 @@ async function syncAllAuditCollectrRows() {
         collectrSyncSkipped: false,
         collectrError: "",
         collectrSyncStatus: "Collectr queued on VPS"
-      });
+      }, { render: false });
     }
+    recomputeAuditSummaryTotals();
+    saveAuditState();
+    renderAuditSummary();
 
     while (auditCollectrSyncJobId) {
       const response = await fetch("/api/audit/collectr-sync/status?jobId=" + encodeURIComponent(auditCollectrSyncJobId), {
@@ -1087,12 +1116,16 @@ async function syncAllAuditCollectrRows() {
       }
       if (!response.ok || !data.ok) throw new Error(data.error || "Unable to load Collectr sync job.");
       const job = data.job || {};
-      mergeAuditCollectrSyncRows(job.rows);
+      mergeAuditCollectrSyncRows(job.rows, { render: false });
       auditCollectrSyncAllCompleted = Number(job.completed || 0);
       auditCollectrSyncAllFailed = Number(job.failed || 0);
-      renderAuditSummary();
+      renderAuditSyncProgress();
       if (["complete", "failed", "canceled"].includes(job.state)) {
         if (job.state === "canceled") auditCollectrSyncAllStopRequested = true;
+        mergeAuditCollectrSyncRows(job.rows, { render: false });
+        recomputeAuditSummaryTotals();
+        saveAuditState();
+        renderAuditSummary();
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -1115,9 +1148,12 @@ async function syncAllAuditCollectrRows() {
     for (const row of rows) {
       const current = getAuditSummaryRow(row.cardId);
       if (current && current.collectrSyncing) {
-        applyAuditCollectrSyncError(row.cardId, message);
+        applyAuditCollectrSyncError(row.cardId, message, { render: false });
       }
     }
+    recomputeAuditSummaryTotals();
+    saveAuditState();
+    renderAuditSummary();
   } finally {
     auditCollectrSyncAllRunning = false;
     auditCollectrSyncAllStopRequested = false;
