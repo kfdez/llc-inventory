@@ -1,6 +1,7 @@
 const http = require("http");
 const { buildCollectrUrl, fetchCollectrJson, isAllowedCollectrPath } = require("./client");
 const { AuditCollectrReviewService } = require("./auditReviewService");
+const { AuditCollectrSyncService } = require("./auditSyncService");
 
 function normalizeSecret(value) {
   return String(value || "").trim();
@@ -63,6 +64,9 @@ function startCollectrProxyServer({ config, logger, store }) {
   const auditReviewService = store
     ? new AuditCollectrReviewService({ config: config.collectrProxy, store, logger })
     : null;
+  const auditSyncService = store
+    ? new AuditCollectrSyncService({ config: config.collectrProxy, store, logger })
+    : null;
 
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, "http://127.0.0.1");
@@ -111,6 +115,48 @@ function startCollectrProxyServer({ config, logger, store }) {
       try {
         const body = await readJsonBody(request);
         sendJson(response, 200, { ok: true, job: auditReviewService.stopJob(body.jobId) });
+      } catch (error) {
+        sendJson(response, 404, { ok: false, error: error.message });
+      }
+      return;
+    }
+
+    if (auditSyncService && url.pathname === "/collectr/audit-sync/status") {
+      if (request.method !== "GET") {
+        sendJson(response, 405, { ok: false, error: "Method not allowed." });
+        return;
+      }
+      try {
+        sendJson(response, 200, { ok: true, job: auditSyncService.getJob(url.searchParams.get("jobId")) });
+      } catch (error) {
+        sendJson(response, 404, { ok: false, error: error.message });
+      }
+      return;
+    }
+
+    if (auditSyncService && url.pathname === "/collectr/audit-sync/start") {
+      if (request.method !== "POST") {
+        sendJson(response, 405, { ok: false, error: "Method not allowed." });
+        return;
+      }
+      try {
+        const body = await readJsonBody(request, 2 * 1024 * 1024);
+        sendJson(response, 200, { ok: true, job: auditSyncService.startJob(body) });
+      } catch (error) {
+        logger.warn({ err: error }, "Collectr audit sync start failed.");
+        sendJson(response, 400, { ok: false, error: error.message });
+      }
+      return;
+    }
+
+    if (auditSyncService && url.pathname === "/collectr/audit-sync/stop") {
+      if (request.method !== "POST") {
+        sendJson(response, 405, { ok: false, error: "Method not allowed." });
+        return;
+      }
+      try {
+        const body = await readJsonBody(request);
+        sendJson(response, 200, { ok: true, job: auditSyncService.stopJob(body.jobId) });
       } catch (error) {
         sendJson(response, 404, { ok: false, error: error.message });
       }
@@ -180,6 +226,10 @@ function startCollectrProxyServer({ config, logger, store }) {
   if (auditReviewService) {
     auditReviewService.start();
     server.on("close", () => auditReviewService.stop());
+  }
+  if (auditSyncService) {
+    auditSyncService.start();
+    server.on("close", () => auditSyncService.stop());
   }
 
   return server;

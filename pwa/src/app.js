@@ -126,6 +126,7 @@ let auditCollectrAbortController = null;
 let auditSummaryLoadVersion = 0;
 let auditCollectrSyncAllRunning = false;
 let auditCollectrSyncAllStopRequested = false;
+let auditCollectrSyncJobId = storageGet(localStorage, "auditCollectrSyncJobId", "");
 let auditCollectrSyncAllTotal = 0;
 let auditCollectrSyncAllCompleted = 0;
 let auditCollectrSyncAllFailed = 0;
@@ -932,6 +933,44 @@ function applyAuditCollectrSyncError(cardId, message, options = {}) {
   });
 }
 
+function compactAuditCollectrSyncJobRow(row) {
+  const compact = compactAuditCollectrJobRow(row);
+  return {
+    ...compact,
+    targetQuantity: Number(row.scannedCount || 0),
+    collectrQuantity: Number(row.collectrQuantity || 0),
+    collectrPortfolioName: row.collectrPortfolioName || "",
+    collectrProductId: row.collectrProductId || "",
+    collectrSubType: row.collectrSubType || "",
+    collectrGradeId: row.collectrGradeId || "",
+    collectrUserOwnedProductId: row.collectrUserOwnedProductId || ""
+  };
+}
+
+function mergeAuditCollectrSyncRows(rows) {
+  if (!auditSummary || !Array.isArray(auditSummary.rows)) return;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const status = String(row.status || "");
+    if (status === "synced") {
+      applyAuditCollectrSyncSuccess(row.cardId, row.targetQuantity, {
+        result: {
+          portfolio: { name: row.collectrPortfolioName || "" },
+          product: { id: row.collectrProductId || "" },
+          collectr: { currentQuantity: Number(row.collectrQuantity || row.targetQuantity || 0) }
+        }
+      });
+    } else if (status === "failed") {
+      applyAuditCollectrSyncError(row.cardId, row.error || "Collectr sync failed.", { skipped: true });
+    } else if (status === "retry") {
+      updateAuditReviewRow(row.cardId, {
+        collectrSyncing: true,
+        collectrSyncStatus: "Collectr retry queued" + (row.attempts ? " (" + row.attempts + "/3)" : ""),
+        collectrError: row.error || ""
+      });
+    }
+  }
+}
+
 function compactAuditCollectrJobRow(row) {
   const item = row.item || {};
   return {
@@ -1102,26 +1141,67 @@ async function syncAllAuditCollectrRows() {
   const rows = getSyncableAuditReviewRows();
   if (!rows.length) return;
   if (!window.confirm("Sync " + rows.length + " Collectr update" + (rows.length === 1 ? "" : "s") + "?")) return;
+  if (!auditSummary || !auditSummary.session || !auditSummary.session.session_id) {
+    setErrorStatus("Collectr sync error", "Audit session is required before syncing Collectr.");
+    return;
+  }
 
   auditCollectrSyncAllRunning = true;
   auditCollectrSyncAllStopRequested = false;
   auditCollectrSyncAllTotal = rows.length;
   auditCollectrSyncAllCompleted = 0;
   auditCollectrSyncAllFailed = 0;
+  auditCollectrSyncJobId = "";
   renderAuditSummary();
   try {
-    for (const row of rows) {
-      if (auditCollectrSyncAllStopRequested) break;
-      const cardId = row.cardId;
-      const targetQuantity = Number(row.scannedCount || 0);
-      try {
-        await syncAuditCollectrReviewRow(cardId, targetQuantity, { maxAttempts: 3, skippedOnFail: true });
-        auditCollectrSyncAllCompleted += 1;
-      } catch (_) {
-        auditCollectrSyncAllFailed += 1;
-      }
-      renderAuditSummary();
+    const startResponse = await fetch("/api/audit/collectr-sync/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-App-Pin": pin },
+      body: JSON.stringify({
+        sessionId: auditSummary.session.session_id,
+        rows: rows.map(compactAuditCollectrSyncJobRow)
+      })
+    });
+    const startData = await startResponse.json();
+    if (startResponse.status === 401) {
+      lock();
+      throw new Error("Scanner PIN expired. Unlock the app again.");
     }
+    if (!startResponse.ok || !startData.ok) throw new Error(startData.error || "Unable to start Collectr sync job.");
+    auditCollectrSyncJobId = startData.job && startData.job.id || "";
+    storageSet(localStorage, "auditCollectrSyncJobId", auditCollectrSyncJobId);
+
+    for (const row of rows) {
+      updateAuditReviewRow(row.cardId, {
+        collectrSyncing: true,
+        collectrSyncSkipped: false,
+        collectrError: "",
+        collectrSyncStatus: "Collectr queued on VPS"
+      });
+    }
+
+    while (auditCollectrSyncJobId) {
+      const response = await fetch("/api/audit/collectr-sync/status?jobId=" + encodeURIComponent(auditCollectrSyncJobId), {
+        headers: { "X-App-Pin": pin }
+      });
+      const data = await response.json();
+      if (response.status === 401) {
+        lock();
+        throw new Error("Scanner PIN expired. Unlock the app again.");
+      }
+      if (!response.ok || !data.ok) throw new Error(data.error || "Unable to load Collectr sync job.");
+      const job = data.job || {};
+      mergeAuditCollectrSyncRows(job.rows);
+      auditCollectrSyncAllCompleted = Number(job.completed || 0);
+      auditCollectrSyncAllFailed = Number(job.failed || 0);
+      renderAuditSummary();
+      if (["complete", "failed", "canceled"].includes(job.state)) {
+        if (job.state === "canceled") auditCollectrSyncAllStopRequested = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+
     if (auditCollectrSyncAllStopRequested) {
       setStatus("Collectr sync stopped", "success");
       elements.cameraMessage.textContent = auditCollectrSyncAllCompleted + " synced. Sync all stopped before remaining updates.";
@@ -1135,6 +1215,8 @@ async function syncAllAuditCollectrRows() {
   } finally {
     auditCollectrSyncAllRunning = false;
     auditCollectrSyncAllStopRequested = false;
+    auditCollectrSyncJobId = "";
+    storageRemove(localStorage, "auditCollectrSyncJobId");
     auditCollectrSyncAllTotal = 0;
     auditCollectrSyncAllCompleted = 0;
     auditCollectrSyncAllFailed = 0;
@@ -1816,6 +1898,16 @@ elements.auditSummaryPanel.addEventListener("click", async (event) => {
     auditCollectrSyncAllStopRequested = true;
     stopSyncAllButton.disabled = true;
     stopSyncAllButton.textContent = "Stopping";
+    const jobId = auditCollectrSyncJobId;
+    if (jobId) {
+      try {
+        await fetch("/api/audit/collectr-sync/stop", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-App-Pin": pin },
+          body: JSON.stringify({ jobId })
+        });
+      } catch (_) {}
+    }
     renderAuditSummary();
     elements.cameraMessage.textContent = "Sync all will stop after the current Collectr update finishes.";
     return;

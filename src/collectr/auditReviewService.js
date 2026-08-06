@@ -401,5 +401,9 @@ class AuditCollectrReviewService {
 
 module.exports = {
   AuditCollectrReviewService,
-  JOB_TYPE
+  JOB_TYPE,
+  flattenProductDetailLines,
+  normalizeCardId,
+  normalizeValue,
+  selectDataArray
 };

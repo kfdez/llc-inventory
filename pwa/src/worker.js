@@ -1501,6 +1501,68 @@ async function stopAuditCollectrJob(request, env) {
   }
 }
 
+async function startAuditCollectrSyncJob(request, env) {
+  const authorized = isAuthorized(request, env);
+  if (!authorized.ok) return authorized.response;
+  let payload;
+  try {
+    payload = await request.json();
+  } catch (_) {
+    return json({ ok: false, error: "Invalid request body." }, 400);
+  }
+  const sessionId = String(payload.sessionId || "").trim();
+  const rows = Array.isArray(payload.rows) ? payload.rows : [];
+  if (!sessionId) return json({ ok: false, error: "Audit session is required." }, 400);
+  if (!rows.length) return json({ ok: false, error: "At least one sync row is required." }, 400);
+  try {
+    const data = await collectrProxyJobRequest(env, "collectr/audit-sync/start", {
+      method: "POST",
+      body: { sessionId, rows }
+    });
+    return json({ ok: true, job: data.job });
+  } catch (error) {
+    return json({ ok: false, error: "Audit Collectr sync start failed: " + error.message }, 502);
+  }
+}
+
+async function getAuditCollectrSyncJobStatus(request, env) {
+  const authorized = isAuthorized(request, env);
+  if (!authorized.ok) return authorized.response;
+  const requestUrl = new URL(request.url);
+  const jobId = String(requestUrl.searchParams.get("jobId") || "").trim();
+  if (!jobId) return json({ ok: false, error: "Collectr sync job ID is required." }, 400);
+  try {
+    const data = await collectrProxyJobRequest(env, "collectr/audit-sync/status", {
+      query: { jobId }
+    });
+    return json({ ok: true, job: data.job });
+  } catch (error) {
+    return json({ ok: false, error: "Audit Collectr sync status failed: " + error.message }, 502);
+  }
+}
+
+async function stopAuditCollectrSyncJob(request, env) {
+  const authorized = isAuthorized(request, env);
+  if (!authorized.ok) return authorized.response;
+  let payload;
+  try {
+    payload = await request.json();
+  } catch (_) {
+    return json({ ok: false, error: "Invalid request body." }, 400);
+  }
+  const jobId = String(payload.jobId || "").trim();
+  if (!jobId) return json({ ok: false, error: "Collectr sync job ID is required." }, 400);
+  try {
+    const data = await collectrProxyJobRequest(env, "collectr/audit-sync/stop", {
+      method: "POST",
+      body: { jobId }
+    });
+    return json({ ok: true, job: data.job });
+  } catch (error) {
+    return json({ ok: false, error: "Audit Collectr sync stop failed: " + error.message }, 502);
+  }
+}
+
 async function cacheStatus(request, env, ctx) {
   const authorized = isAuthorized(request, env);
   if (!authorized.ok) return authorized.response;
@@ -1601,6 +1663,18 @@ export default {
     if (url.pathname === "/api/audit/collectr-job/stop") {
       if (request.method !== "POST") return json({ ok: false, error: "Method not allowed." }, 405);
       return stopAuditCollectrJob(request, env);
+    }
+    if (url.pathname === "/api/audit/collectr-sync/start") {
+      if (request.method !== "POST") return json({ ok: false, error: "Method not allowed." }, 405);
+      return startAuditCollectrSyncJob(request, env);
+    }
+    if (url.pathname === "/api/audit/collectr-sync/status") {
+      if (request.method !== "GET") return json({ ok: false, error: "Method not allowed." }, 405);
+      return getAuditCollectrSyncJobStatus(request, env);
+    }
+    if (url.pathname === "/api/audit/collectr-sync/stop") {
+      if (request.method !== "POST") return json({ ok: false, error: "Method not allowed." }, 405);
+      return stopAuditCollectrSyncJob(request, env);
     }
     const response = await env.ASSETS.fetch(request);
     const headers = secureAssetHeaders(response.headers);
