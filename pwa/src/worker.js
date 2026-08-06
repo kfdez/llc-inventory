@@ -15,6 +15,35 @@ let inventorySnapshot = null;
 let inventorySnapshotPromise = null;
 let inventorySnapshotLastError = "";
 let collectrPortfolioCache = null;
+const COLLECTR_PORTFOLIO_NAME_MAP = {
+  "al-display-singles": "d078a459-7e5d-4ab6-8999-351c8d140591",
+  "df-display-singles": "31f7e5c3-76df-4f86-90ea-5367c016c254",
+  "ej-collection-06-03": "8840cfe4-246f-4fb9-8079-d607245d90a0",
+  "ej-display-singles": "e2928214-6d90-45b7-93fb-522850beb068",
+  "es-display-singles": "29345776-a272-4e95-bc1f-bcd2c44aac4a",
+  "es-slabs": "e6f466ea-d99e-44f4-bc5d-f11a72ba36ff",
+  "ja-display-singles": "d3f4b9df-8f3f-402a-ba8a-88150f67058a",
+  "jl-display-singles": "6d783b19-c0e9-4eb5-b960-776a385c50a4",
+  "jm-display-singles": "cfce6637-f400-4f15-8a08-8e93fb205677",
+  "jm-slabs": "5f7d0879-fffa-4506-8fa8-a0167b198555",
+  "jo-display-singles": "eca98fcf-ae80-43fd-947b-e828d9a2d3eb",
+  "jo-slabs": "117c1a16-2776-4a0e-93b1-79af3caf6a5a",
+  "kf-display-singles": "1f1c5007-73a4-4556-8659-7baf6de563af",
+  "kf-prism-set": "4ae6f86b-de83-4377-ae92-df1de671b29e",
+  "kf-radiant-set": "5dfc32e2-9edb-4ccf-826b-ea3ab7ac20ec",
+  "kf-slabs": "0397ee56-c04b-45e7-9868-09e3f653ea80",
+  "lc-display-singles": "45ac2b9c-8a7a-40b0-9913-51f66a346bd0",
+  "llc-collection-06-13": "c368be52-dcb9-4081-ac29-0693a9ea3466",
+  "llc-display-singles": "a802ac2b-b819-4ed6-9077-796391e6f126",
+  "me-display-singles": "6c903c49-e96a-4134-81bb-9c85b3545071",
+  "pc-display-singles": "77ed0fb3-ee8c-4844-82bf-f32794f20924",
+  "pc-slabs": "f3369179-65a8-4ad2-9fc2-f7b4bb9e4f9c",
+  "pj-display-singles": "7d30ff43-f62c-4ea3-a32a-ab9441408b82",
+  "pj-slabs": "4a28c9bb-f1be-4559-b538-151798c442f4",
+  "sealed-new": "77dac92b-7432-4042-93e8-430d3a763368",
+  "wh-display-singles": "a76c642f-bc38-4652-92de-8ea9fbd3a3d5",
+  "wh-slabs": "96771e84-60f0-498b-83ec-7a2f99b321f3"
+};
 
 function normalizeCardId(cardId) {
   return String(cardId || "").trim().toUpperCase();
@@ -25,6 +54,13 @@ function normalizeCollectrMatchValue(value) {
     .replace(/\u00a0/g, " ")
     .toLowerCase()
     .replace(/[^a-z0-9]/g, "");
+}
+
+function normalizeCollectrPortfolioMapKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "-");
 }
 
 function buildCollectrMatchKey(setName, cardNumber, variance) {
@@ -483,6 +519,15 @@ function resolveCollectrPortfolio(item, portfolios) {
   if (!portfolioName) {
     return { ok: false, error: "Inventory row has no Portfolio Name or Collectr Collection ID.", portfolio: null, warnings: [] };
   }
+  const mappedId = COLLECTR_PORTFOLIO_NAME_MAP[normalizeCollectrPortfolioMapKey(portfolioName)];
+  if (mappedId) {
+    return {
+      ok: true,
+      source: "portfolio-map",
+      portfolio: { id: mappedId, name: portfolioName },
+      warnings: ["Collectr Collection ID was resolved from the local portfolio map."]
+    };
+  }
 
   const matches = portfolios.filter((portfolio) =>
     normalizeCollectrMatchValue(portfolio.name) === normalizeCollectrMatchValue(portfolioName)
@@ -631,7 +676,8 @@ async function trimCollectrPurchasePrices(env, userOwnedProductId, targetQuantit
 
 async function resolveCollectrItem(env, item) {
   const directPortfolioId = String(item.collectrCollectionId || item.collectrPortfolioId || "").trim();
-  const portfolios = directPortfolioId ? [] : await fetchCollectrPortfolios(env);
+  const mappedPortfolioId = COLLECTR_PORTFOLIO_NAME_MAP[normalizeCollectrPortfolioMapKey(item.portfolioName)];
+  const portfolios = directPortfolioId || mappedPortfolioId ? [] : await fetchCollectrPortfolios(env);
   const portfolioResolution = resolveCollectrPortfolio(item, portfolios);
   if (!portfolioResolution.ok) {
     const error = new Error(portfolioResolution.error);

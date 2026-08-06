@@ -183,6 +183,10 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isCollectrRateLimitError(error) {
+  return /HTTP 429|rate limit/i.test(String(error && error.message || error || ""));
+}
+
 function authenticatedFetch(url, options = {}) {
   const timeoutMs = Number(options.timeoutMs || 0);
   const fetchOptions = { ...options };
@@ -454,6 +458,7 @@ function recomputeAuditSummaryTotals() {
 
 function isAuditReviewRowSyncable(row) {
   if (!row || !row.item || row.collectrSyncing) return false;
+  if (/^#(ERROR|N\/A|VALUE|REF|NAME|DIV\/0)!?$/i.test(String(row.cardId || "").trim())) return false;
   if (row.collectrSyncSkipped) return false;
   const targetQuantity = Number(row.scannedCount || 0);
   if (!Number.isInteger(targetQuantity) || targetQuantity < 0) return false;
@@ -887,7 +892,7 @@ function updateAuditReviewRow(cardId, patch, options = {}) {
     return updated;
   });
   recomputeAuditSummaryTotals();
-  saveAuditState();
+  if (options.save !== false) saveAuditState();
   if (options.render !== false) renderAuditState();
 }
 
@@ -1052,6 +1057,7 @@ async function adjustCollectrQuantityFromAudit(row, targetQuantity) {
 async function syncAuditCollectrReviewRow(cardId, targetQuantity, options = {}) {
   const maxAttempts = Number(options.maxAttempts || 1);
   const render = options.render !== false;
+  const save = options.save !== false;
   let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const row = getAuditSummaryRow(cardId);
@@ -1061,10 +1067,10 @@ async function syncAuditCollectrReviewRow(cardId, targetQuantity, options = {}) 
       collectrSyncSkipped: false,
       collectrError: "",
       collectrSyncStatus: "Collectr syncing" + (attempt > 1 ? " (retry " + attempt + "/" + maxAttempts + ")" : "")
-    }, { render });
+    }, { render, save });
     try {
       const data = await adjustCollectrQuantityFromAudit(row, targetQuantity);
-      applyAuditCollectrSyncSuccess(cardId, targetQuantity, data, { render });
+      applyAuditCollectrSyncSuccess(cardId, targetQuantity, data, { render, save });
       return data;
     } catch (error) {
       lastError = error;
@@ -1073,7 +1079,7 @@ async function syncAuditCollectrReviewRow(cardId, targetQuantity, options = {}) 
           collectrSyncing: true,
           collectrError: "",
           collectrSyncStatus: "Collectr retry queued: " + error.message
-        }, { render });
+        }, { render, save });
         await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
         continue;
       }
@@ -1081,7 +1087,8 @@ async function syncAuditCollectrReviewRow(cardId, targetQuantity, options = {}) 
   }
   applyAuditCollectrSyncError(cardId, lastError ? lastError.message : "Collectr sync failed.", {
     skipped: Boolean(options.skippedOnFail),
-    render
+    render,
+    save
   });
   throw lastError || new Error("Collectr sync failed.");
 }
@@ -1112,21 +1119,44 @@ async function syncAllAuditCollectrRows() {
   try {
     for (const row of rows) {
       if (auditCollectrSyncAllStopRequested) break;
-      try {
-        await syncAuditCollectrReviewRow(row.cardId, Number(row.scannedCount || 0), {
-          maxAttempts: 1,
-          skippedOnFail: true,
-          render: false
-        });
-        auditCollectrSyncAllCompleted += 1;
-      } catch (_) {
-        auditCollectrSyncAllFailed += 1;
+      let synced = false;
+      for (let attempt = 1; attempt <= 3 && !auditCollectrSyncAllStopRequested; attempt += 1) {
+        try {
+          await syncAuditCollectrReviewRow(row.cardId, Number(row.scannedCount || 0), {
+            maxAttempts: 1,
+            skippedOnFail: true,
+            render: false,
+            save: false
+          });
+          auditCollectrSyncAllCompleted += 1;
+          synced = true;
+        } catch (error) {
+          if (isCollectrRateLimitError(error) && attempt < 3) {
+            auditCollectrSyncAllRetry = 1;
+            updateAuditReviewRow(row.cardId, {
+              collectrSyncing: true,
+              collectrSyncSkipped: false,
+              collectrError: "",
+              collectrSyncStatus: "Collectr rate limit; retrying in 2 minutes"
+            }, { render: false, save: false });
+            recomputeAuditSummaryTotals();
+            renderAuditSyncProgress();
+            await sleep(120000);
+            auditCollectrSyncAllRetry = 0;
+            continue;
+          }
+          auditCollectrSyncAllFailed += 1;
+        }
+        break;
       }
       recomputeAuditSummaryTotals();
-      saveAuditState();
+      if ((auditCollectrSyncAllCompleted + auditCollectrSyncAllFailed) % 10 === 0) saveAuditState();
       renderAuditSyncProgress();
-      await sleep(4000);
+      if (auditCollectrSyncAllStopRequested) continue;
+      const hasProductId = row.collectrProductId || row.item && row.item.collectrProductId;
+      await sleep(hasProductId ? 4000 : 15000);
     }
+    saveAuditState();
     renderAuditSummary();
 
     if (auditCollectrSyncAllStopRequested) {
