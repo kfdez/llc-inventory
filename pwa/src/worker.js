@@ -1321,10 +1321,21 @@ async function getAuditStatusForSession(env, sessionId) {
   };
 }
 
+async function getAuditScansForSession(env, sessionId) {
+  const data = await appsScriptPost(env, "audit/scans", { sessionId });
+  const result = data.result || {};
+  const session = result.session || null;
+  if (!session || String(session.session_id || "").trim() !== sessionId) return null;
+  return {
+    session,
+    scans: Array.isArray(result.scans) ? result.scans : []
+  };
+}
+
 async function getFastAuditSummary(env, sessionId) {
-  const status = await getAuditStatusForSession(env, sessionId);
+  const status = await getAuditScansForSession(env, sessionId);
   if (!status) return null;
-  await ensureInventorySnapshot(env, { allowStale: true });
+  await ensureInventorySnapshot(env, { allowStale: true, force: true });
   return buildSheetAuditSummaryFromScans(status);
 }
 
@@ -1333,12 +1344,12 @@ async function getFastGlobalAuditSummary(env, sessionIds) {
   if (!ids.length) return null;
   if (ids.length > 50) throw new Error("Global audit review is limited to 50 sessions at a time.");
 
-  await ensureInventorySnapshot(env, { allowStale: true });
+  await ensureInventorySnapshot(env, { allowStale: true, force: true });
   const selectedSessions = [];
   const scans = [];
   for (let index = 0; index < ids.length; index += GLOBAL_AUDIT_STATUS_CONCURRENCY) {
     const batchIds = ids.slice(index, index + GLOBAL_AUDIT_STATUS_CONCURRENCY);
-    const batchStatuses = await Promise.all(batchIds.map((sessionId) => getAuditStatusForSession(env, sessionId)));
+    const batchStatuses = await Promise.all(batchIds.map((sessionId) => getAuditScansForSession(env, sessionId)));
     batchStatuses.forEach((status, batchIndex) => {
       const sessionId = batchIds[batchIndex];
       if (!status) throw new Error("Audit session was not found: " + sessionId);
@@ -1388,8 +1399,10 @@ async function getAuditSummary(request, env) {
       const data = await appsScriptPost(env, "audit/summary", { sessionIds });
       return json({ ok: true, summary: prepareAuditSummary(data.summary) });
     }
-    const fastSummary = await getFastAuditSummary(env, sessionId);
-    if (fastSummary) return json({ ok: true, summary: prepareAuditSummary(fastSummary) });
+    try {
+      const fastSummary = await getFastAuditSummary(env, sessionId);
+      if (fastSummary) return json({ ok: true, summary: prepareAuditSummary(fastSummary) });
+    } catch (_) {}
     const data = await appsScriptPost(env, "audit/summary", { sessionId });
     return json({ ok: true, summary: prepareAuditSummary(data.summary) });
   } catch (error) {

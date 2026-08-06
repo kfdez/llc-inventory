@@ -168,14 +168,16 @@ test("audit sessions endpoint returns recent audit sessions", async () => {
   }
 });
 
-test("audit summary returns sheet review before Collectr enrichment", async () => {
+test("audit summary returns sheet review from full scan list before Collectr enrichment", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url) => {
+  globalThis.fetch = async (url, options = {}) => {
     const requestUrl = new URL(String(url));
     assert.equal(requestUrl.host, "script.example");
 
-    if (requestUrl.searchParams.get("path") === "audit/status") {
-      assert.equal(requestUrl.searchParams.get("sessionId"), "session-1");
+    if (options.method === "POST") {
+      const body = JSON.parse(options.body);
+      assert.equal(body.path, "audit/scans");
+      assert.equal(body.payload.sessionId, "session-1");
       return Response.json({
         ok: true,
         result: {
@@ -234,27 +236,35 @@ test("audit summary can request a global multi-session review", async () => {
   globalThis.fetch = async (url, options = {}) => {
     const requestUrl = new URL(String(url));
     assert.equal(requestUrl.host, "script.example");
-    const body = JSON.parse(options.body);
-    assert.equal(body.path, "audit/summary");
-    assert.deepEqual(body.payload.sessionIds, ["session-1", "session-2"]);
-    return Response.json({
-      ok: true,
-      summary: {
-        session: { session_id: "global:session-1,session-2", session_name: "Global audit review" },
-        selectedSessions: [
-          { session_id: "session-1", session_name: "Binder 1" },
-          { session_id: "session-2", session_name: "Box A" }
-        ],
-        rows: [{
-          cardId: "KYL-S-ABC12345",
-          scannedCount: 2,
-          sheetQuantity: 2,
-          status: "match",
-          item: { cardId: "KYL-S-ABC12345" }
-        }],
-        totals: { scannedCount: 2, uniqueCount: 1, issueCount: 0, sheetQuantity: 2 }
-      }
-    });
+    if (options.method === "POST") {
+      const body = JSON.parse(options.body);
+      assert.equal(body.path, "audit/scans");
+      return Response.json({
+        ok: true,
+        result: {
+          session: { session_id: body.payload.sessionId, session_name: body.payload.sessionId === "session-1" ? "Binder 1" : "Box A" },
+          scans: [{
+            cardId: "KYL-S-ABC12345",
+            status: "active",
+            recordKey: "record-" + body.payload.sessionId
+          }]
+        }
+      });
+    }
+    if (requestUrl.searchParams.get("path") === "inventory/lookup-snapshot") {
+      return Response.json({
+        ok: true,
+        snapshot: {
+          itemsById: {
+            "KYL-S-ABC12345": {
+              cardId: "KYL-S-ABC12345",
+              quantity: 2
+            }
+          }
+        }
+      });
+    }
+    throw new Error("Unexpected fetch: " + requestUrl.toString());
   };
 
   try {
@@ -274,17 +284,88 @@ test("audit summary can request a global multi-session review", async () => {
   }
 });
 
+test("global audit summary counts scans older than the audit status window", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => {
+    const requestUrl = new URL(String(url));
+    assert.equal(requestUrl.host, "script.example");
+    if (options.method === "POST") {
+      const body = JSON.parse(options.body);
+      assert.equal(body.path, "audit/scans");
+      assert.equal(body.payload.sessionId, "mega-session");
+      const scans = [{
+        cardId: "KF-S-294067F5",
+        status: "active",
+        recordKey: "record-kf"
+      }];
+      for (let index = 0; index < 250; index += 1) {
+        scans.push({
+          cardId: "OTHER-S-" + String(index).padStart(8, "0"),
+          status: "active",
+          recordKey: "record-" + index
+        });
+      }
+      return Response.json({
+        ok: true,
+        result: {
+          session: { session_id: "mega-session", session_name: "Mega ex binder" },
+          scans
+        }
+      });
+    }
+    if (requestUrl.searchParams.get("path") === "inventory/lookup-snapshot") {
+      return Response.json({
+        ok: true,
+        snapshot: {
+          itemsById: {
+            "KF-S-294067F5": {
+              cardId: "KF-S-294067F5",
+              name: "Mega ex",
+              quantity: 11
+            },
+            "KYL-S-ABC12345": {
+              cardId: "KYL-S-ABC12345",
+              portfolioName: "KYL",
+              setName: "Black Bolt",
+              name: "Crustle",
+              cardNumber: "130/086",
+              quantity: 1
+            }
+          }
+        }
+      });
+    }
+    throw new Error("Unexpected fetch: " + requestUrl.toString());
+  };
+
+  try {
+    const env = { APP_PIN: "482913", APPS_SCRIPT_API_BASE_URL: "https://script.example/exec" };
+    const response = await worker.fetch(new Request("https://scanner.test/api/audit/summary", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-App-Pin": "482913" },
+      body: JSON.stringify({ sessionIds: ["mega-session"] })
+    }), env, {});
+    const data = await response.json();
+    const row = data.summary.rows.find((candidate) => candidate.cardId === "KF-S-294067F5");
+    assert.equal(response.status, 200);
+    assert.equal(row.scannedCount, 1);
+    assert.equal(row.sheetQuantity, 11);
+    assert.equal(row.status, "short");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("audit summary falls back to Apps Script summary when status has no session", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options = {}) => {
     const requestUrl = new URL(String(url));
     assert.equal(requestUrl.host, "script.example");
 
-    if (requestUrl.searchParams.get("path") === "audit/status") {
-      return Response.json({ ok: true, result: { session: null, scans: [] } });
-    }
-
     const body = JSON.parse(options.body);
+    if (body.path === "audit/scans") {
+      return Response.json({ ok: false, error: "Unknown POST path: audit/scans" });
+    }
     if (body.path === "audit/summary") {
       assert.equal(body.payload.sessionId, "session-1");
       return Response.json({

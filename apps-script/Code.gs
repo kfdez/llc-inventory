@@ -176,6 +176,10 @@ function doPost(e) {
       return jsonResponse_({ ok: true, result: undoAuditScan_(payload) });
     }
 
+    if (path === "audit/scans") {
+      return jsonResponse_({ ok: true, result: getAuditScans_(payload) });
+    }
+
     if (path === "audit/summary") {
       return jsonResponse_({ ok: true, summary: getAuditSummary_(payload) });
     }
@@ -1367,6 +1371,19 @@ function getAuditScanRowsForSession_(session) {
       recordKey: String(getHeaderValue_(row, headers, ["record_key"]) || "").trim()
     };
   });
+}
+
+function getAuditScans_(payload) {
+  const sessionId = String(payload.sessionId || "").trim();
+  if (!sessionId) {
+    throw new Error("Audit session is required.");
+  }
+
+  const session = getAuditSessionById_(sessionId);
+  return {
+    session: serializeAuditSession_(session),
+    scans: getAuditScanRowsForSession_(session)
+  };
 }
 
 function getAuditSummaryStatus_(scannedCount, sheetQuantity, item) {
