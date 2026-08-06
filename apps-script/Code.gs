@@ -1166,7 +1166,7 @@ function refreshAuditReviewMarkers() {
     return String(session.status || "").trim().toLowerCase() === "active";
   });
   const session = (activeSessions.length ? activeSessions : sessions)[(activeSessions.length ? activeSessions : sessions).length - 1];
-  const result = refreshAuditReviewMarkersForSession_(session);
+  const result = refreshAuditReviewMarkersForSession_(session, { force: true });
   SpreadsheetApp.getUi().alert(
     "Audit review markers refreshed for " + session.session_name + ".\n" +
     "Updated rows: " + result.updatedRows + "\n" +
@@ -1174,10 +1174,10 @@ function refreshAuditReviewMarkers() {
   );
 }
 
-function refreshAuditReviewMarkersForSession_(session) {
+function refreshAuditReviewMarkersForSession_(session, options) {
   const sessionSheet = getSpreadsheet_().getSheetByName(session.sheet_tab_name);
-  const sessionResult = refreshAuditReviewMarkersInSheet_(sessionSheet, session.session_id);
-  const indexResult = refreshAuditReviewMarkersInSheet_(getAuditScansSheet_(), session.session_id);
+  const sessionResult = refreshAuditReviewMarkersInSheet_(sessionSheet, session.session_id, options);
+  const indexResult = refreshAuditReviewMarkersInSheet_(getAuditScansSheet_(), session.session_id, options);
   SpreadsheetApp.flush();
   return {
     updatedRows: sessionResult.updatedRows + indexResult.updatedRows,
@@ -1185,7 +1185,8 @@ function refreshAuditReviewMarkersForSession_(session) {
   };
 }
 
-function refreshAuditReviewMarkersInSheet_(sheet, sessionId) {
+function refreshAuditReviewMarkersInSheet_(sheet, sessionId, options) {
+  const refreshOptions = options || {};
   if (!sheet) {
     return { updatedRows: 0, notFoundRows: 0 };
   }
@@ -1214,7 +1215,9 @@ function refreshAuditReviewMarkersInSheet_(sheet, sessionId) {
       continue;
     }
     const cardId = String(row[cardIdIndex] || "").trim();
-    if (!cardId || String(row[inventoryStatusIndex] || "").trim()) {
+    const currentStatus = String(row[inventoryStatusIndex] || "").trim().toLowerCase();
+    const shouldRefresh = refreshOptions.force || !currentStatus || (refreshOptions.recheckNotFound && currentStatus === "not_found");
+    if (!cardId || !shouldRefresh) {
       continue;
     }
     const fields = getAuditInventoryReviewFields_(cardId);
@@ -1478,6 +1481,7 @@ function getGlobalAuditSummary_(sessionIds) {
   });
   const scans = [];
   sessions.forEach(function (session) {
+    refreshAuditReviewMarkersForSession_(session, { recheckNotFound: true });
     getAuditScanRowsForSession_(session).forEach(function (scan) {
       scans.push(scan);
     });
@@ -1508,6 +1512,7 @@ function getAuditSummary_(payload) {
   }
 
   const session = getAuditSessionById_(sessionId);
+  refreshAuditReviewMarkersForSession_(session, { recheckNotFound: true });
   const scans = getAuditScanRowsForSession_(session);
   return buildAuditSummary_(serializeAuditSession_(session), scans);
 }
