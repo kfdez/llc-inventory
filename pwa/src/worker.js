@@ -630,7 +630,8 @@ async function trimCollectrPurchasePrices(env, userOwnedProductId, targetQuantit
 }
 
 async function resolveCollectrItem(env, item) {
-  const portfolios = await fetchCollectrPortfolios(env);
+  const directPortfolioId = String(item.collectrCollectionId || item.collectrPortfolioId || "").trim();
+  const portfolios = directPortfolioId ? [] : await fetchCollectrPortfolios(env);
   const portfolioResolution = resolveCollectrPortfolio(item, portfolios);
   if (!portfolioResolution.ok) {
     const error = new Error(portfolioResolution.error);
@@ -986,6 +987,8 @@ async function adjustCollectrQuantity(request, env) {
     const resolvedItem = {
       ...item,
       portfolioName: collectr.portfolioName || item.portfolioName || "",
+      collectrCollectionId: collectr.collectionId || item.collectrCollectionId || item.collectrPortfolioId || "",
+      collectrPortfolioId: collectr.collectionId || item.collectrPortfolioId || item.collectrCollectionId || "",
       collectrProductId: collectr.productId || item.collectrProductId || "",
       collectrSubType: collectr.subType || item.collectrSubType || "",
       collectrGradeId: collectr.gradeId || item.collectrGradeId || "",

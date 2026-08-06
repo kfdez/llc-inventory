@@ -1026,11 +1026,13 @@ async function adjustCollectrQuantityFromAudit(row, targetQuantity) {
       cardId,
       targetQuantity: quantity,
       collectr: {
-        portfolioName: row.collectrPortfolioName || "",
-        productId: row.collectrProductId || "",
-        subType: row.collectrSubType || "",
-        gradeId: row.collectrGradeId || "",
-        userOwnedProductId: row.collectrUserOwnedProductId || ""
+        portfolioName: row.collectrPortfolioName || row.item && row.item.portfolioName || "",
+        collectionId: row.collectrCollectionId || row.collectrPortfolioId ||
+          row.item && (row.item.collectrCollectionId || row.item.collectrPortfolioId) || "",
+        productId: row.collectrProductId || row.item && row.item.collectrProductId || "",
+        subType: row.collectrSubType || row.item && row.item.collectrSubType || "",
+        gradeId: row.collectrGradeId || row.item && row.item.collectrGradeId || "",
+        userOwnedProductId: row.collectrUserOwnedProductId || row.item && row.item.collectrUserOwnedProductId || ""
       }
     })
   });
@@ -1049,6 +1051,7 @@ async function adjustCollectrQuantityFromAudit(row, targetQuantity) {
 
 async function syncAuditCollectrReviewRow(cardId, targetQuantity, options = {}) {
   const maxAttempts = Number(options.maxAttempts || 1);
+  const render = options.render !== false;
   let lastError = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const row = getAuditSummaryRow(cardId);
@@ -1058,10 +1061,10 @@ async function syncAuditCollectrReviewRow(cardId, targetQuantity, options = {}) 
       collectrSyncSkipped: false,
       collectrError: "",
       collectrSyncStatus: "Collectr syncing" + (attempt > 1 ? " (retry " + attempt + "/" + maxAttempts + ")" : "")
-    });
+    }, { render });
     try {
       const data = await adjustCollectrQuantityFromAudit(row, targetQuantity);
-      applyAuditCollectrSyncSuccess(cardId, targetQuantity, data);
+      applyAuditCollectrSyncSuccess(cardId, targetQuantity, data, { render });
       return data;
     } catch (error) {
       lastError = error;
@@ -1070,14 +1073,15 @@ async function syncAuditCollectrReviewRow(cardId, targetQuantity, options = {}) 
           collectrSyncing: true,
           collectrError: "",
           collectrSyncStatus: "Collectr retry queued: " + error.message
-        });
+        }, { render });
         await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
         continue;
       }
     }
   }
   applyAuditCollectrSyncError(cardId, lastError ? lastError.message : "Collectr sync failed.", {
-    skipped: Boolean(options.skippedOnFail)
+    skipped: Boolean(options.skippedOnFail),
+    render
   });
   throw lastError || new Error("Collectr sync failed.");
 }
@@ -1111,15 +1115,19 @@ async function syncAllAuditCollectrRows() {
       try {
         await syncAuditCollectrReviewRow(row.cardId, Number(row.scannedCount || 0), {
           maxAttempts: 1,
-          skippedOnFail: true
+          skippedOnFail: true,
+          render: false
         });
         auditCollectrSyncAllCompleted += 1;
       } catch (_) {
         auditCollectrSyncAllFailed += 1;
       }
+      recomputeAuditSummaryTotals();
+      saveAuditState();
       renderAuditSyncProgress();
       await sleep(4000);
     }
+    renderAuditSummary();
 
     if (auditCollectrSyncAllStopRequested) {
       setStatus("Collectr sync stopped", "success");
