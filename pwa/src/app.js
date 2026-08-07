@@ -23,6 +23,8 @@ const elements = {
   lookupModeButton: document.querySelector("#lookupModeButton"),
   cartModeButton: document.querySelector("#cartModeButton"),
   auditModeButton: document.querySelector("#auditModeButton"),
+  defaultLayoutButton: document.querySelector("#defaultLayoutButton"),
+  compactLayoutButton: document.querySelector("#compactLayoutButton"),
   cartBadge: document.querySelector("#cartBadge"),
   auditBadge: document.querySelector("#auditBadge"),
   cartPanel: document.querySelector("#cartPanel"),
@@ -111,6 +113,7 @@ let lookupQueue = [];
 let lastCode = "";
 let missedScanFrames = 0;
 let mode = ["lookup", "cart", "audit"].includes(storedMode) ? storedMode : "lookup";
+let lookupLayout = storageGet(localStorage, "lookupLayout", "") === "compact" ? "compact" : "default";
 let cart = readJsonStorage("scannerCart", []);
 let auditSession = readJsonStorage("auditSession", null);
 let auditScanCount = readNumberStorage("auditScanCount", 0);
@@ -1464,6 +1467,7 @@ function setMode(nextMode) {
   elements.cartModeButton.classList.toggle("active", cartMode);
   elements.auditModeButton.classList.toggle("active", auditMode);
   elements.scannerScreen.classList.toggle("lookup-mode", mode === "lookup");
+  applyLookupLayout();
   elements.modeMenuButton.setAttribute("aria-label", "Open mode menu. Current mode: " + mode);
   closeModeDrawer();
   document.querySelector("#result").hidden = cartMode || auditMode;
@@ -1475,6 +1479,19 @@ function setMode(nextMode) {
   elements.cameraMessage.textContent = scanning
     ? (cartMode ? "Scan labels consecutively to add them to the cart." : auditMode ? "Hold a label in frame, then tap Capture QR." : "Scan a label, then enter its Stickered Price.")
     : (cartMode ? "Start the camera to add labels to the cart." : auditMode ? "Start the camera to audit IDs." : "Start the camera for lookup and pricing.");
+}
+
+function setLookupLayout(nextLayout) {
+  lookupLayout = nextLayout === "compact" ? "compact" : "default";
+  storageSet(localStorage, "lookupLayout", lookupLayout);
+  applyLookupLayout();
+}
+
+function applyLookupLayout() {
+  const compact = mode === "lookup" && lookupLayout === "compact";
+  elements.scannerScreen.classList.toggle("lookup-compact", compact);
+  elements.defaultLayoutButton.classList.toggle("active", lookupLayout === "default");
+  elements.compactLayoutButton.classList.toggle("active", lookupLayout === "compact");
 }
 
 function openModeDrawer() {
@@ -1701,6 +1718,8 @@ elements.modeBackdrop.addEventListener("click", closeModeDrawer);
 elements.lookupModeButton.addEventListener("click", () => setMode("lookup"));
 elements.cartModeButton.addEventListener("click", () => setMode("cart"));
 elements.auditModeButton.addEventListener("click", () => setMode("audit"));
+elements.defaultLayoutButton.addEventListener("click", () => setLookupLayout("default"));
+elements.compactLayoutButton.addEventListener("click", () => setLookupLayout("compact"));
 elements.captureAuditQrButton.addEventListener("click", () => {
   if (!pendingAuditCardId) {
     setErrorStatus("No QR ready", "No QR code is currently detected. Hold the label in frame, then tap Capture QR.");

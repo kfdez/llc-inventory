@@ -70,6 +70,11 @@ h2 {
   color: var(--ink);
   font-size: 1.42rem;
 }
+h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 1rem;
+}
 
 .eyebrow {
   margin-bottom: 5px;
@@ -267,6 +272,36 @@ h2 {
   color: var(--accent-strong);
   border-color: #83c9dc;
 }
+.settings-section {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.settings-heading {
+  margin-bottom: 10px;
+}
+.segmented-control {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+.layout-button {
+  min-height: 38px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  padding: 7px 9px;
+}
+.layout-button.active {
+  border-color: #83c9dc;
+  background: var(--surface-strong);
+  color: var(--accent-strong);
+  box-shadow: 0 6px 16px rgba(17, 58, 75, .08);
+}
 .drawer-open { overflow: hidden; }
 
 #cartBadge, #auditBadge {
@@ -285,6 +320,44 @@ h2 {
 .camera-panel, .result-panel, .cart-panel, .audit-panel {
   padding: 14px;
   min-width: 0;
+}
+
+#scannerScreen.lookup-compact {
+  grid-template-columns: minmax(320px, .9fr) minmax(360px, 1.1fr);
+}
+#scannerScreen.lookup-compact .camera-panel,
+#scannerScreen.lookup-compact .result-panel {
+  padding: 10px;
+}
+#scannerScreen.lookup-compact .viewport {
+  min-height: 300px;
+}
+#scannerScreen.lookup-compact video {
+  height: 300px;
+}
+#scannerScreen.lookup-compact .decoded-panel {
+  display: none;
+}
+#scannerScreen.lookup-compact #cameraMessage {
+  min-height: 0;
+  padding: 6px 8px;
+}
+#scannerScreen.lookup-compact .controls {
+  margin: 8px 0;
+}
+#scannerScreen.lookup-compact .result-title-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+#scannerScreen.lookup-compact .prices {
+  margin: 10px 0;
+}
+#scannerScreen.lookup-compact .sticker-editor {
+  margin-bottom: 10px;
+  padding: 10px;
+}
+#scannerScreen.lookup-compact #details,
+#scannerScreen.lookup-compact #resultContent > details {
+  display: none;
 }
 
 .viewport {
@@ -1045,6 +1118,130 @@ summary {
     padding: 6px;
   }
   .sticker-meta { margin-top: 5px; }
+
+  #scannerScreen.lookup-compact {
+    grid-template-columns: 1fr;
+    gap: 7px;
+    margin-top: 7px;
+  }
+  #scannerScreen.lookup-compact .camera-panel,
+  #scannerScreen.lookup-compact .result-panel {
+    padding: 8px;
+  }
+  #scannerScreen.lookup-compact .viewport {
+    min-height: 0;
+    height: 118px;
+  }
+  #scannerScreen.lookup-compact video {
+    height: 100%;
+  }
+  #scannerScreen.lookup-compact .scan-frame {
+    width: 22%;
+    border-width: 2px;
+    border-radius: 8px;
+  }
+  #scannerScreen.lookup-compact #cameraMessage {
+    margin-top: 5px;
+    padding: 5px 7px;
+    font-size: .72rem;
+  }
+  #scannerScreen.lookup-compact .controls {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 5px;
+    margin: 6px 0;
+  }
+  #scannerScreen.lookup-compact .controls button {
+    min-height: 34px;
+    padding: 5px 6px;
+    font-size: .74rem;
+  }
+  #scannerScreen.lookup-compact .manual-form label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+  #scannerScreen.lookup-compact .manual-form div {
+    gap: 5px;
+  }
+  #scannerScreen.lookup-compact .manual-form input,
+  #scannerScreen.lookup-compact .manual-form button {
+    min-height: 36px;
+    padding: 6px 8px;
+  }
+  #scannerScreen.lookup-compact .result-panel.empty {
+    min-height: 112px;
+  }
+  #scannerScreen.lookup-compact #emptyState h2,
+  #scannerScreen.lookup-compact .result-heading h2 {
+    font-size: 1rem;
+  }
+  #scannerScreen.lookup-compact #emptyState p:last-child {
+    margin-bottom: 0;
+  }
+  #scannerScreen.lookup-compact #resultMeta {
+    margin-bottom: 0;
+    font-size: .7rem;
+  }
+  #scannerScreen.lookup-compact .id-badge {
+    padding: 3px 6px;
+    font-size: .61rem;
+  }
+  #scannerScreen.lookup-compact .prices {
+    margin: 7px 0;
+    gap: 5px;
+  }
+  #scannerScreen.lookup-compact .prices > div,
+  #scannerScreen.lookup-compact .prices > button {
+    min-height: 48px;
+    padding: 6px;
+  }
+  #scannerScreen.lookup-compact .prices span {
+    font-size: .6rem;
+  }
+  #scannerScreen.lookup-compact .prices strong {
+    font-size: .96rem;
+  }
+  #scannerScreen.lookup-compact .sticker-editor {
+    margin-bottom: 0;
+    padding: 7px;
+  }
+  #scannerScreen.lookup-compact .sticker-editor label {
+    margin-bottom: 4px;
+    font-size: .62rem;
+  }
+  #scannerScreen.lookup-compact .sticker-portfolio {
+    margin-bottom: 4px;
+    font-size: .72rem;
+  }
+  #scannerScreen.lookup-compact .sticker-editor-row {
+    gap: 5px;
+  }
+  #scannerScreen.lookup-compact .sticker-editor-row input,
+  #scannerScreen.lookup-compact .sticker-editor-row button {
+    min-height: 36px;
+    padding: 6px 8px;
+  }
+  #scannerScreen.lookup-compact .sticker-targets {
+    margin-top: 5px;
+    padding: 5px;
+  }
+  #scannerScreen.lookup-compact .sticker-targets > span {
+    display: none;
+  }
+  #scannerScreen.lookup-compact .target-chip {
+    padding: 3px 6px;
+  }
+  #scannerScreen.lookup-compact .target-chip small {
+    font-size: .62rem;
+  }
+  #scannerScreen.lookup-compact .sticker-meta {
+    margin-top: 4px;
+    font-size: .66rem;
+  }
 }
 
 @media (display-mode: standalone) {
